@@ -16,3 +16,11 @@ utterance text
     * inputs for typing current utterance
     * inputs for typing style prompt
     * button for ”generate style suggestions
+
+## Data
+
+Run the following to download the dataset(s):
+
+```python
+src/get_data.py --libritts-p / --other / --all
+```
