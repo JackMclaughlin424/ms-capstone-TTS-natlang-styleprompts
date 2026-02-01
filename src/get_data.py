@@ -82,26 +82,29 @@ def clone_libritts_p(path):
     ## TODO: add training set 
 
 
-def clone_placeholder_dataset(path):
+def clone_styletalk(path):
     """
-    Placeholder for another dataset.
-    Replace the repo URL and any post-processing as needed.
+    Downloads StyleTalk files from Google Drive
     """
     data_dir = Path(path)
 
     if data_dir.exists():
-        print(f"[INFO] Placeholder dataset already exists at {data_dir}")
+        print(f"StyleTalk dataset already exists at {data_dir}")
         return
 
-    # TODO: replace with real dataset repo
-    subprocess.run(
-        [
-            "git", "clone",
-            "https://github.com/example/example-dataset.git",
-            str(data_dir),
-        ],
-        check=True,
-    )
+    import gdown
+
+    url = "https://drive.google.com/uc?id=12mlGaZkkBebk4gf0qY684W_bwvmCsu_t"
+    name = "audio"
+    archive_path = data_dir / f"{name}.tar.gz"
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    gdown.download(url,  str(archive_path), quiet=False)
+    
+    # extract
+    extract_dir = data_dir
+    extract_tar_gz(archive_path, extract_dir)
+
 
 
 def main():
@@ -116,7 +119,7 @@ def main():
     )
 
     parser.add_argument(
-        "--placeholder",
+        "--styletalk",
         action="store_true",
         help="Download the placeholder dataset",
     )
@@ -129,18 +132,18 @@ def main():
 
     args = parser.parse_args()
 
-    if not (args.libritts or args.placeholder or args.all):
+    if not (args.libritts or args.styletalk or args.all):
         parser.error("Please specify at least one dataset to download.")
 
     if args.libritts:
         clone_libritts_p("data/raw/libritts")
 
-    elif args.placeholder:
-        clone_placeholder_dataset("data/raw/placeholder-dataset")
+    elif args.styletalk:
+        clone_styletalk("data/raw/styletalk")
         
     elif args.all:
         clone_libritts_p("data/raw/libritts")
-        clone_placeholder_dataset("data/raw/placeholder-dataset")
+        clone_styletalk("data/raw/styletalk")
 
 
 if __name__ == "__main__":
