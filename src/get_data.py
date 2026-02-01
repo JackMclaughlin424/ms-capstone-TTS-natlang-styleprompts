@@ -87,23 +87,49 @@ def clone_styletalk(path):
     Downloads StyleTalk files from Google Drive
     """
     data_dir = Path(path)
-
-    if data_dir.exists():
-        print(f"StyleTalk dataset already exists at {data_dir}")
-        return
-
-    import gdown
+    annot_dir = data_dir / "annotations"
+    # Cloning annotations
+    if annot_dir.exists():
+        print(f"StyleTalk annotations already exists at {annot_dir}")
+        
+    else:
+        # LibriTTS-P (extra annotation data)
+        subprocess.run(
+            [
+                "git", "clone",
+                "https://github.com/DanielLin94144/StyleTalk.git",
+                str(annot_dir),
+            ],
+            check=True,
+        )
+        
+    # Downloading audio
+    
 
     url = "https://drive.google.com/uc?id=12mlGaZkkBebk4gf0qY684W_bwvmCsu_t"
     name = "audio"
     archive_path = data_dir / f"{name}.tar.gz"
-    archive_path.parent.mkdir(parents=True, exist_ok=True)
     
-    gdown.download(url,  str(archive_path), quiet=False)
-    
-    # extract
     extract_dir = data_dir
-    extract_tar_gz(archive_path, extract_dir)
+    tar_top_folder = "audio" # this is within the tar, so i pass just extract_dir to get correct structure
+    final_structure = extract_dir / tar_top_folder 
+    
+    if final_structure.exists():
+        print(f"StyleTalk audio already exists at {final_structure}")
+    elif  archive_path.exists():
+        print(f"StyleTalk audio tar already exists at {archive_path}")
+    else:
+        archive_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        import gdown
+        gdown.download(url,  str(archive_path), quiet=False)
+
+    # extract
+    
+    if final_structure.exists():
+        print(f"StyleTalk audio already extracted at {final_structure}")
+    else:
+        extract_tar_gz(archive_path, extract_dir)
 
 
 
