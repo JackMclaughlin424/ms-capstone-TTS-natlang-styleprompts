@@ -5,7 +5,7 @@ import requests
 import tarfile
 from tqdm import tqdm
 
-def extract_tar_gz(archive_path: Path, extract_to: Path):
+def extract_tar(archive_path: Path, extract_to: Path, gz=True):
     if extract_to.exists():
         print(f"Archive already extracted to {extract_to}")
         return
@@ -13,8 +13,12 @@ def extract_tar_gz(archive_path: Path, extract_to: Path):
     print(f"Extracting {archive_path}")
     extract_to.mkdir(parents=True, exist_ok=True)
 
-    with tarfile.open(archive_path, "r:gz") as tar:
-        tar.extractall(path=extract_to, filter="data")
+    if gz:
+        with tarfile.open(archive_path, "r:gz") as tar:
+            tar.extractall(path=extract_to, filter="data")
+    else:
+        with tarfile.open(archive_path, "r") as tar:
+            tar.extractall(path=extract_to, filter="data")
         
 
 def download_file(url: str, output_path: Path):
@@ -43,16 +47,20 @@ def download_file(url: str, output_path: Path):
                     pbar.update(len(chunk))
                 
 
-def download_tar_dataset(url: str, download_path, name: str):
+def download_tar_dataset(url: str, download_path, name: str, gz=True):
     raw_dir = Path(download_path)
-    archive_path = raw_dir / f"{name}.tar.gz"
-    extract_dir = raw_dir / name
+    archive_path = raw_dir / (f"{name}.tar.gz" if gz else f"{name}.tar")
+    extract_dir = raw_dir
 
     download_file(url, archive_path)
-    extract_tar_gz(archive_path, extract_dir)
+    extract_tar(archive_path, extract_dir, gz)
 
 
 def clone_libritts_p(path):
+    """Clone LibriTTS-P and download LibriTTS-R audio
+    
+    https://github.com/line/LibriTTS-P
+    """
     data_dir = Path(path+"/libritts-p")
 
     if data_dir.exists():
@@ -84,7 +92,9 @@ def clone_libritts_p(path):
 
 def clone_styletalk(path):
     """
-    Downloads StyleTalk files from Google Drive
+    Downloads StyleTalk files from Google Drive, clones repo for annotations
+    
+    https://github.com/DanielLin94144/StyleTalk
     """
     data_dir = Path(path)
     annot_dir = data_dir / "annotations"
@@ -129,8 +139,103 @@ def clone_styletalk(path):
     if final_structure.exists():
         print(f"StyleTalk audio already extracted at {final_structure}")
     else:
-        extract_tar_gz(archive_path, extract_dir)
+        extract_tar(archive_path, extract_dir)
+        
+        
+def normalize_file(input_path: Path):
+    backup = input_path.with_suffix(input_path.suffix + ".backup")
 
+    # rename original -> backup
+    input_path.rename(backup)
+
+    cmd = [
+        "sox",
+        str(backup),
+        str(input_path),
+        "norm",
+        "-0.1",
+    ]
+
+    print("Running:", " ".join(cmd))
+    subprocess.run(cmd, check=True)
+    
+
+def normalize_directory(root_dir: str):
+    root = Path(root_dir)
+
+    for wav in root.rglob("*.wav"):
+        normalize_file(wav)
+    
+    
+def expresso_preprocessing(expresso_root: str):
+    """Performs loudness normalization and VAD segmentation for Expresso dataset."""
+    expresso_root = str(Path(expresso_root).resolve())
+    
+    bash_exe = r"C:/Program Files/Git/bin/bash.exe"
+
+    commands = [
+        ["python", "data/raw/paraspeechcaps/annotations/dataset/audio_preprocessing/apply_expresso_vad.py", expresso_root]
+    ]
+
+    for cmd in commands:
+        print(f"Running: {' '.join(cmd)}")
+        subprocess.run(cmd, check=True)
+        
+    normalize_directory(expresso_root)
+    
+        
+def clone_paraspeechcaps(path):
+    """Download helper scripts, annotations files, and select audio files for ParaSpeechCaps dataset.
+    
+    **Note**: Does not download all audio for ParaSpeechCaps, only the audio used for this project:
+    
+        1. Expresso. Also completes preprocessing steps suggested in the ParaSpeechCaps repo
+    
+    Instructions:
+    https://github.com/ajd12342/paraspeechcaps?tab=readme-ov-file#2-paraspeechcaps-dataset 
+    """
+    data_dir = Path(path)
+    annot_dir = data_dir / "annotations"
+    # Cloning annotations
+    if annot_dir.exists():
+        print(f"ParaSpeechCaps repo already exists at {annot_dir}")
+   
+        
+    else:
+        subprocess.run(
+            [
+                "git", "clone",
+                "https://github.com/ajd12342/paraspeechcaps.git",
+                str(annot_dir)
+            ],
+            check=True,
+        )
+        
+    print("If not cached, downloading annotations from hugging face (Cached in ~/.cache/huggingface/datasets/).")
+    from datasets import load_dataset
+
+    # Load the entire dataset
+    dataset = load_dataset("ajd12342/paraspeechcaps")
+
+    # Load specific splits of the dataset. This caches them locally for easy reload
+    train_scaled = load_dataset("ajd12342/paraspeechcaps", split="train_scaled")
+    train_base = load_dataset("ajd12342/paraspeechcaps", split="train_base")
+    dev = load_dataset("ajd12342/paraspeechcaps", split="dev")
+    holdout = load_dataset("ajd12342/paraspeechcaps", split="holdout")
+
+        
+    # Audio datasets
+    import subprocess
+    
+    data_dir_audio = data_dir / "audio"
+        
+    # Download Expresso dataset
+    expresso_url = "https://dl.fbaipublicfiles.com/textless_nlp/expresso/data/expresso.tar"
+    name = "expresso"
+    download_tar_dataset(expresso_url, data_dir_audio, name, gz=False)
+    
+    expresso_root = data_dir_audio / name
+    expresso_preprocessing(expresso_root)
 
 
 def main():
@@ -147,18 +252,24 @@ def main():
     parser.add_argument(
         "--styletalk",
         action="store_true",
-        help="Download the placeholder dataset",
+        help="Download the styletalk dataset",
+    )
+    
+    parser.add_argument(
+        "--paraspeechcaps",
+        action="store_true",
+        help="Download the paraspeechcaps dataset",
     )
     
     parser.add_argument(
         "--all",
         action="store_true",
-        help="Download the placeholder dataset",
+        help="Download all dataset",
     )
 
     args = parser.parse_args()
 
-    if not (args.libritts or args.styletalk or args.all):
+    if not (args.libritts or args.styletalk or args.paraspeechcaps or args.all):
         parser.error("Please specify at least one dataset to download.")
 
     if args.libritts:
@@ -167,9 +278,13 @@ def main():
     elif args.styletalk:
         clone_styletalk("data/raw/styletalk")
         
+    elif args.paraspeechcaps:
+        clone_paraspeechcaps("data/raw/paraspeechcaps")
+        
     elif args.all:
         clone_libritts_p("data/raw/libritts")
         clone_styletalk("data/raw/styletalk")
+        clone_paraspeechcaps("data/raw/paraspeechcaps")
 
 
 if __name__ == "__main__":

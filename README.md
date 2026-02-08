@@ -22,5 +22,10 @@ utterance text
 Run the following to download the dataset(s):
 
 ```python
-src/get_data.py --libritts-p / --other / --all
+# download all datasets
+src/get_data.py 
+
+# download specific
+src/get_data.py --dataset libritts 
+src/get_data.py --dataset libritts styletalk
 ```
