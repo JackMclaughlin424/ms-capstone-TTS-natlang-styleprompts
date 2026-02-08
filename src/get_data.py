@@ -143,7 +143,48 @@ def clone_styletalk(path):
     else:
         extract_tar(archive_path, extract_dir)
         
-     
+    
+    
+def download_ears(foldername: Path):
+    """Recreated from EARS github repository download_ears.py"""
+    import os
+    import urllib.request
+    import zipfile
+    
+    def download_file(url, filename):
+        with urllib.request.urlopen(url) as response:
+            data = response.read()
+            with open(filename, 'wb') as file:
+                file.write(data)
+
+
+    def unzip_file(zip_path, extract_to):
+        os.makedirs(extract_to, exist_ok=True)
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(extract_to)
+
+    # these speaker ids were chosen to EXCLUDE
+    # because they have ethnicity="white/caucasian" and native language="american english",
+    # i.e. the majority values in the EARS dataset. exlcuding these will help balance the dataset and 
+    # reduce the number of files to download (87 speakers remaining, ~ 87 hours)
+    
+    exclude_these_speakers = ['p034','p002','p076','p011','p084','p028','p019','p051','p066','p022',
+                              'p049','p018','p102','p014','p093','p048','p088','p054','p087','p070']
+    
+    foldername.mkdir(parents=True, exist_ok=True)
+    (foldername / "zips").mkdir(parents=True, exist_ok=True)
+
+    for i in tqdm(range(1, 108), desc=f"download {107 - len(exclude_these_speakers)} speakers of EARS dataset (skipping {len(exclude_these_speakers)} speakers)"):
+        if f"p{i:03d}" in exclude_these_speakers:
+            continue
+        url = f"https://github.com/facebookresearch/ears_dataset/releases/download/dataset/p{i:03d}.zip"
+        zip_file = str(foldername / "zips_temp" / f"p{i:03d}.zip")
+        wav_parent = str(foldername)
+        download_file(url, zip_file)
+        unzip_file(zip_file, wav_parent )
+        os.remove(zip_file)
+        
+    os.remove(str(foldername / "zips_temp"))
     
         
 def clone_paraspeechcaps(path):
@@ -201,22 +242,12 @@ def clone_paraspeechcaps(path):
     name = "expresso"
     download_tar_dataset(expresso_url, data_dir_audio, name, gz=False)
     
-    # Clone & download EARS dataset
-    ears_git = "https://github.com/facebookresearch/ears_dataset.git"
-    ears_folder = data_dir_audio / "EARS"
-    if ears_folder.exists():
-        print(f"EARS repo already exists at {ears_folder}")
-   
+    # Download ears
+    ears_audio = data_dir_audio / "EARS"
+    if ears_audio.exists():
+        print("EARS audio folder already exists")
     else:
-        print("Cloning EARS repo to get download scripts.")
-        subprocess.run(
-            [
-                "git", "clone",
-                ears_git,
-                str(ears_folder)
-            ],
-            check=True,
-        )
+        download_ears(ears_audio)
         
     
 
