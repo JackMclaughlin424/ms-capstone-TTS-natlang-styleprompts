@@ -6,9 +6,6 @@ import tarfile
 from tqdm import tqdm
 
 def extract_tar(archive_path: Path, extract_to: Path, gz=True):
-    if extract_to.exists():
-        print(f"Archive already extracted to {extract_to}")
-        return
 
     print(f"Extracting {archive_path}")
     extract_to.mkdir(parents=True, exist_ok=True)
@@ -49,6 +46,11 @@ def download_file(url: str, output_path: Path):
 
 def download_tar_dataset(url: str, download_path, name: str, gz=True):
     raw_dir = Path(download_path)
+    
+    if (raw_dir / name).exists():
+        print(f"{name} dataset already downloaded and extracted at {raw_dir / name}")
+        return
+    
     archive_path = raw_dir / (f"{name}.tar.gz" if gz else f"{name}.tar")
     extract_dir = raw_dir
 
@@ -141,47 +143,7 @@ def clone_styletalk(path):
     else:
         extract_tar(archive_path, extract_dir)
         
-        
-def normalize_file(input_path: Path):
-    backup = input_path.with_suffix(input_path.suffix + ".backup")
-
-    # rename original -> backup
-    input_path.rename(backup)
-
-    cmd = [
-        "sox",
-        str(backup),
-        str(input_path),
-        "norm",
-        "-0.1",
-    ]
-
-    print("Running:", " ".join(cmd))
-    subprocess.run(cmd, check=True)
-    
-
-def normalize_directory(root_dir: str):
-    root = Path(root_dir)
-
-    for wav in root.rglob("*.wav"):
-        normalize_file(wav)
-    
-    
-def expresso_preprocessing(expresso_root: str):
-    """Performs loudness normalization and VAD segmentation for Expresso dataset."""
-    expresso_root = str(Path(expresso_root).resolve())
-    
-    bash_exe = r"C:/Program Files/Git/bin/bash.exe"
-
-    commands = [
-        ["python", "data/raw/paraspeechcaps/annotations/dataset/audio_preprocessing/apply_expresso_vad.py", expresso_root]
-    ]
-
-    for cmd in commands:
-        print(f"Running: {' '.join(cmd)}")
-        subprocess.run(cmd, check=True)
-        
-    normalize_directory(expresso_root)
+     
     
         
 def clone_paraspeechcaps(path):
@@ -194,6 +156,10 @@ def clone_paraspeechcaps(path):
     Instructions:
     https://github.com/ajd12342/paraspeechcaps?tab=readme-ov-file#2-paraspeechcaps-dataset 
     """
+    
+    from datasets import load_dataset, load_dataset_builder
+    import os
+    
     data_dir = Path(path)
     annot_dir = data_dir / "annotations"
     # Cloning annotations
@@ -210,32 +176,49 @@ def clone_paraspeechcaps(path):
             ],
             check=True,
         )
-        
-    print("If not cached, downloading annotations from hugging face (Cached in ~/.cache/huggingface/datasets/).")
-    from datasets import load_dataset
+    
+    psc_dataset_name = "ajd12342/paraspeechcaps"
+    print("Checking if ParaSpeechCaps already cached.")
+    builder = load_dataset_builder(psc_dataset_name)
+    # this is the directory HF would use for the processed dataset
+    cache_dir = builder.cache_dir
 
-    # Load the entire dataset
-    dataset = load_dataset("ajd12342/paraspeechcaps")
-
-    # Load specific splits of the dataset. This caches them locally for easy reload
-    train_scaled = load_dataset("ajd12342/paraspeechcaps", split="train_scaled")
-    train_base = load_dataset("ajd12342/paraspeechcaps", split="train_base")
-    dev = load_dataset("ajd12342/paraspeechcaps", split="dev")
-    holdout = load_dataset("ajd12342/paraspeechcaps", split="holdout")
+    if os.path.exists(cache_dir):
+        print("ParaSpeechCaps already cached. SKIPPING.")
+    else:
+        # Download and cache the dataset
+        print("Not cached. Downloadign ParaSpeechCaps")
+        _ = load_dataset("ajd12342/paraspeechcaps")
 
         
     # Audio datasets
-    import subprocess
     
     data_dir_audio = data_dir / "audio"
         
     # Download Expresso dataset
+    print("Downloading audio from EXPRESSO dataset")
     expresso_url = "https://dl.fbaipublicfiles.com/textless_nlp/expresso/data/expresso.tar"
     name = "expresso"
     download_tar_dataset(expresso_url, data_dir_audio, name, gz=False)
     
-    expresso_root = data_dir_audio / name
-    expresso_preprocessing(expresso_root)
+    # Clone & download EARS dataset
+    ears_git = "https://github.com/facebookresearch/ears_dataset.git"
+    ears_folder = data_dir_audio / "EARS"
+    if ears_folder.exists():
+        print(f"EARS repo already exists at {ears_folder}")
+   
+    else:
+        print("Cloning EARS repo to get download scripts.")
+        subprocess.run(
+            [
+                "git", "clone",
+                ears_git,
+                str(ears_folder)
+            ],
+            check=True,
+        )
+        
+    
 
 
 def main():

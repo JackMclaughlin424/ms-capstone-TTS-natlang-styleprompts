@@ -19,6 +19,12 @@ utterance text
 
 ## Data
 
+This project utilizes multiple datasets:
+
+1. ParaSpeechCaps
+    a. This dataset annotates a few pre-existing audio datasets, EARS, Expresso, Emilia, and VoxCeleb. This project only uses the EARS and Expresso portions. Together these datasets cover around 140 hours of speech.
+    b. 
+
 Run the following to download the dataset(s):
 
 ```python
@@ -28,4 +34,5 @@ src/get_data.py
 # download specific
 src/get_data.py --dataset libritts 
 src/get_data.py --dataset libritts styletalk
+...
 ```
