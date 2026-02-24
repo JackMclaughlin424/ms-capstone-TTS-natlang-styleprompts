@@ -186,6 +186,15 @@ def download_ears(foldername: Path):
         
     os.remove(str(foldername / "zips_temp"))
     
+    
+def download_emilia():
+    tar_subset = ["EN_B00000","EN_B00001","EN_B00011","EN_B00012"
+                  ,"EN_B00017","EN_B00019","EN_B00030","EN_B00033"
+                  ,"EN_B00037","EN_B00041","EN_B00044","EN_B00047"
+                ]
+    
+    
+    
         
 def clone_paraspeechcaps(path):
     """Download helper scripts, annotations files, and select audio files for ParaSpeechCaps dataset.
@@ -249,6 +258,7 @@ def clone_paraspeechcaps(path):
     else:
         download_ears(ears_audio)
         
+    # Download subset of Emilia
     
 
 
