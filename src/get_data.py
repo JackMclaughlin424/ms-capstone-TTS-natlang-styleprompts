@@ -239,12 +239,11 @@ def download_emilia(parent_Path: Path, hf_token):
                 repo_type="dataset",
                 token=hf_token,
                 revision="fc71e07e8572f5f3be1dbd02ed3172a4d298f152",
-                local_dir=parent_Path,
-                local_dir_use_symlinks=False      
+                local_dir=parent_Path      
             )
         
         if extract:
-            extract_tar(local_path, final_path, remove_archive=True)
+            extract_tar(Path(local_path), final_path, remove_archive=True)
     
     
     
