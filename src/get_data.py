@@ -5,17 +5,27 @@ import requests
 import tarfile
 from tqdm import tqdm
 
-def extract_tar(archive_path: Path, extract_to: Path, gz=True):
+def extract_tar(archive_path: Path, extract_to: Path, gz=True, remove_archive=False):
 
     print(f"Extracting {archive_path}")
     extract_to.mkdir(parents=True, exist_ok=True)
 
-    if gz:
-        with tarfile.open(archive_path, "r:gz") as tar:
-            tar.extractall(path=extract_to, filter="data")
-    else:
-        with tarfile.open(archive_path, "r") as tar:
-            tar.extractall(path=extract_to, filter="data")
+    try:
+        if gz:
+            with tarfile.open(archive_path, "r:gz") as tar:
+                tar.extractall(path=extract_to, filter="data")
+        else:
+            with tarfile.open(archive_path, "r") as tar:
+                tar.extractall(path=extract_to, filter="data")
+    except Exception as e:
+        print(f"Error extracting {archive_path}: {e}")
+            
+    if remove_archive:
+        try:
+            archive_path.unlink()
+            print(f"Removed archive {archive_path}")
+        except Exception as e:
+            print(f"Could not remove archive {archive_path}: {e}")
         
 
 def download_file(url: str, output_path: Path):
@@ -187,16 +197,36 @@ def download_ears(foldername: Path):
     os.remove(str(foldername / "zips_temp"))
     
     
-def download_emilia():
+def download_emilia(parent_Path: Path, hf_token):
+    from huggingface_hub import hf_hub_download
+    
     tar_subset = ["EN_B00000","EN_B00001","EN_B00011","EN_B00012"
                   ,"EN_B00017","EN_B00019","EN_B00030","EN_B00033"
                   ,"EN_B00037","EN_B00041","EN_B00044","EN_B00047"
                 ]
     
+    base_url = "https://huggingface.co/datasets/amphion/Emilia-Dataset/resolve/fc71e07e8572f5f3be1dbd02ed3172a4d298f152/EN/"
+    
+    parent_Path.mkdir(parents=True, exist_ok=True)
+    
+    final_path = parent_Path / "EN"
+    
+    print(f"Emilia: Downloading {len(tar_subset)} big tars. This will take hours.")
+    for filename in tar_subset:
+        local_path = hf_hub_download(
+            repo_id="amphion/Emilia-Dataset",
+            filename=f"EN/{filename}.tar.gz",
+            repo_type="dataset",
+            token=hf_token,
+            revision="fc71e07e8572f5f3be1dbd02ed3172a4d298f152"
+        )
+        
+        extract_tar(local_path, final_path, remove_archive=True)
+    
     
     
         
-def clone_paraspeechcaps(path):
+def clone_paraspeechcaps(path, hf_token):
     """Download helper scripts, annotations files, and select audio files for ParaSpeechCaps dataset.
     
     **Note**: Does not download all audio for ParaSpeechCaps, only the audio used for this project:
@@ -259,7 +289,11 @@ def clone_paraspeechcaps(path):
         download_ears(ears_audio)
         
     # Download subset of Emilia
-    
+    emilia_audio_path = data_dir_audio / "Emilia"
+    if emilia_audio_path.exists():
+        print("Emilia dataset already downloaded")
+    else:
+        download_emilia(emilia_audio_path, hf_token)
 
 
 def main():
@@ -290,6 +324,13 @@ def main():
         action="store_true",
         help="Download all dataset",
     )
+    
+    parser.add_argument(
+        "--hf_token",
+        type=str,
+        default=None,
+        help="Include this if also passing --paraspeechcaps or --all. Hugging Face access token for private dataset downloads",
+    )
 
     args = parser.parse_args()
 
@@ -303,12 +344,12 @@ def main():
         clone_styletalk("data/raw/styletalk")
         
     elif args.paraspeechcaps:
-        clone_paraspeechcaps("data/raw/paraspeechcaps")
+        clone_paraspeechcaps("data/raw/paraspeechcaps", args.hf_token)
         
     elif args.all:
         clone_libritts_p("data/raw/libritts")
         clone_styletalk("data/raw/styletalk")
-        clone_paraspeechcaps("data/raw/paraspeechcaps")
+        clone_paraspeechcaps("data/raw/paraspeechcaps", args.hf_token)
 
 
 if __name__ == "__main__":
