@@ -5,9 +5,14 @@ import requests
 import tarfile
 from tqdm import tqdm
 
+from datetime import datetime
+import logging
+
+
+
 def extract_tar(archive_path: Path, extract_to: Path, gz=True, remove_archive=False):
 
-    print(f"Extracting {archive_path}")
+    logging.info(f"Extracting {archive_path}")
     extract_to.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -18,24 +23,24 @@ def extract_tar(archive_path: Path, extract_to: Path, gz=True, remove_archive=Fa
             with tarfile.open(archive_path, "r") as tar:
                 tar.extractall(path=extract_to, filter="data")
     except Exception as e:
-        print(f"Error extracting {archive_path}: {e}")
+        logging.info(f"Error extracting {archive_path}: {e}")
             
     if remove_archive:
         try:
             archive_path.unlink()
-            print(f"Removed archive {archive_path}")
+            logging.info(f"Removed archive {archive_path}")
         except Exception as e:
-            print(f"Could not remove archive {archive_path}: {e}")
+            logging.info(f"Could not remove archive {archive_path}: {e}")
         
 
 def download_file(url: str, output_path: Path):
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     if output_path.exists():
-        print(f"File already exists: {output_path}")
+        logging.info(f"File already exists: {output_path}")
         return
 
-    print(f"Downloading {url}")
+    logging.info(f"Downloading {url}")
     with requests.get(url, stream=True) as r:
         r.raise_for_status()
         total_size = int(r.headers.get("Content-Length", 0))
@@ -58,7 +63,7 @@ def download_tar_dataset(url: str, download_path, name: str, gz=True):
     raw_dir = Path(download_path)
     
     if (raw_dir / name).exists():
-        print(f"{name} dataset already downloaded and extracted at {raw_dir / name}")
+        logging.info(f"{name} dataset already downloaded and extracted at {raw_dir / name}")
         return
     
     archive_path = raw_dir / (f"{name}.tar.gz" if gz else f"{name}.tar")
@@ -76,7 +81,7 @@ def clone_libritts_p(path):
     data_dir = Path(path+"/libritts-p")
 
     if data_dir.exists():
-        print(f"LibriTTS-P already exists at {data_dir}")
+        logging.info(f"LibriTTS-P already exists at {data_dir}")
     else:
         # LibriTTS-P (extra annotation data)
         subprocess.run(
@@ -112,7 +117,7 @@ def clone_styletalk(path):
     annot_dir = data_dir / "annotations"
     # Cloning annotations
     if annot_dir.exists():
-        print(f"StyleTalk annotations already exists at {annot_dir}")
+        logging.info(f"StyleTalk annotations already exists at {annot_dir}")
         
     else:
         # LibriTTS-P (extra annotation data)
@@ -137,9 +142,9 @@ def clone_styletalk(path):
     final_structure = extract_dir / tar_top_folder 
     
     if final_structure.exists():
-        print(f"StyleTalk audio already exists at {final_structure}")
+        logging.info(f"StyleTalk audio already exists at {final_structure}")
     elif  archive_path.exists():
-        print(f"StyleTalk audio tar already exists at {archive_path}")
+        logging.info(f"StyleTalk audio tar already exists at {archive_path}")
     else:
         archive_path.parent.mkdir(parents=True, exist_ok=True)
         
@@ -149,7 +154,7 @@ def clone_styletalk(path):
     # extract
     
     if final_structure.exists():
-        print(f"StyleTalk audio already extracted at {final_structure}")
+        logging.info(f"StyleTalk audio already extracted at {final_structure}")
     else:
         extract_tar(archive_path, extract_dir)
         
@@ -205,23 +210,41 @@ def download_emilia(parent_Path: Path, hf_token):
                   ,"EN_B00037","EN_B00041","EN_B00044","EN_B00047"
                 ]
     
-    base_url = "https://huggingface.co/datasets/amphion/Emilia-Dataset/resolve/fc71e07e8572f5f3be1dbd02ed3172a4d298f152/EN/"
     
     parent_Path.mkdir(parents=True, exist_ok=True)
     
     final_path = parent_Path / "EN"
     
-    print(f"Emilia: Downloading {len(tar_subset)} big tars. This will take hours.")
+    logging.info(f"Emilia: Downloading {len(tar_subset)} big tars. This will take hours.")
     for filename in tar_subset:
-        local_path = hf_hub_download(
-            repo_id="amphion/Emilia-Dataset",
-            filename=f"EN/{filename}.tar.gz",
-            repo_type="dataset",
-            token=hf_token,
-            revision="fc71e07e8572f5f3be1dbd02ed3172a4d298f152"
-        )
         
-        extract_tar(local_path, final_path, remove_archive=True)
+        extracted_Path = final_path / filename
+        tar_file_Path = final_path / Path(str(filename) + ".tar.gz")
+        
+        # check if this tar is already extracted
+        download = True
+        extract = True
+        if extracted_Path.exists():
+            logging.info(f"{str(extracted_Path)} already exists. skipping download & extract.")
+            download = False
+            extract = False
+        elif tar_file_Path.exists():
+            logging.info(f"{str(tar_file_Path)} already exists. skipping to extract.")
+            download = False
+        
+        if download:
+            local_path = hf_hub_download(
+                repo_id="amphion/Emilia-Dataset",
+                filename=f"EN/{filename}.tar.gz",
+                repo_type="dataset",
+                token=hf_token,
+                revision="fc71e07e8572f5f3be1dbd02ed3172a4d298f152",
+                local_dir=parent_Path,
+                local_dir_use_symlinks=False      
+            )
+        
+        if extract:
+            extract_tar(local_path, final_path, remove_archive=True)
     
     
     
@@ -244,7 +267,7 @@ def clone_paraspeechcaps(path, hf_token):
     annot_dir = data_dir / "annotations"
     # Cloning annotations
     if annot_dir.exists():
-        print(f"ParaSpeechCaps repo already exists at {annot_dir}")
+        logging.info(f"ParaSpeechCaps repo already exists at {annot_dir}")
    
         
     else:
@@ -258,16 +281,16 @@ def clone_paraspeechcaps(path, hf_token):
         )
     
     psc_dataset_name = "ajd12342/paraspeechcaps"
-    print("Checking if ParaSpeechCaps already cached.")
+    logging.info("Checking if ParaSpeechCaps already cached.")
     builder = load_dataset_builder(psc_dataset_name)
     # this is the directory HF would use for the processed dataset
     cache_dir = builder.cache_dir
 
     if os.path.exists(cache_dir):
-        print("ParaSpeechCaps already cached. SKIPPING.")
+        logging.info("ParaSpeechCaps already cached. SKIPPING.")
     else:
         # Download and cache the dataset
-        print("Not cached. Downloadign ParaSpeechCaps")
+        logging.info("Not cached. Downloadign ParaSpeechCaps")
         _ = load_dataset("ajd12342/paraspeechcaps")
 
         
@@ -276,7 +299,7 @@ def clone_paraspeechcaps(path, hf_token):
     data_dir_audio = data_dir / "audio"
         
     # Download Expresso dataset
-    print("Downloading audio from EXPRESSO dataset")
+    logging.info("Downloading audio from EXPRESSO dataset")
     expresso_url = "https://dl.fbaipublicfiles.com/textless_nlp/expresso/data/expresso.tar"
     name = "expresso"
     download_tar_dataset(expresso_url, data_dir_audio, name, gz=False)
@@ -284,16 +307,13 @@ def clone_paraspeechcaps(path, hf_token):
     # Download ears
     ears_audio = data_dir_audio / "EARS"
     if ears_audio.exists():
-        print("EARS audio folder already exists")
+        logging.info("EARS audio folder already exists")
     else:
         download_ears(ears_audio)
         
     # Download subset of Emilia
     emilia_audio_path = data_dir_audio / "Emilia"
-    if emilia_audio_path.exists():
-        print("Emilia dataset already downloaded")
-    else:
-        download_emilia(emilia_audio_path, hf_token)
+    download_emilia(emilia_audio_path, hf_token)
 
 
 def main():
@@ -333,6 +353,24 @@ def main():
     )
 
     args = parser.parse_args()
+    
+    
+    
+    # init logging
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    
+    log_path = Path("logs")
+    log_path.mkdir(exist_ok=True)
+    log_filename = f"{str(log_path)}/get_data_{timestamp}.log"
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.FileHandler(log_filename),
+            logging.StreamHandler()  # <-- this is console
+        ]
+    )
 
     if not (args.libritts or args.styletalk or args.paraspeechcaps or args.all):
         parser.error("Please specify at least one dataset to download.")
