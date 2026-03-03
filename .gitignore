@@ -3,3 +3,4 @@ src/eda/figures/
 logs/
 
 src/eda/gaps.csv
+.vscode

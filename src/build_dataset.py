@@ -128,7 +128,7 @@ def add_conversation_index(df_in):
     print(f"Original conversations: {df_split['conv_id'].nunique()}")
     print(f"Split conversations: {df_split['conv_id_split'].nunique()}")
     
-    df_final = df_split.drop(temp_columns_to_drop)
+    df_final = df_split.drop(columns=temp_columns_to_drop)
     
     return df_final
 
@@ -229,10 +229,9 @@ def add_styletalk(psc_df, st_df):
             r['turn_index']             = n_ctx
             r['relative_audio_path']    = curr_audio
             
-            curr_duration = get_wav_duration(Path("data/raw/styletalk/audio/" + curr_audio))
-            r['duration']               = curr_duration
-            
-            
+            r['duration']               = row.get('curr_duration')
+            r['utterance_pitch_mean']   = row.get('curr_utterance_pitch_mean')
+            r['snr']                    = row.get('curr_snr')
             
             transcription = row.get('curr_text')
             
@@ -267,8 +266,9 @@ def add_styletalk(psc_df, st_df):
             r['turn_index']         = n_ctx + (1 if pd.notna(curr_audio) else 0)
             r['relative_audio_path']= res_audio
     
-            res_duration = get_wav_duration(Path("data/raw/styletalk/audio/" + res_audio))
-            r['duration']           = res_duration
+            r['duration']               = row.get('res_duration')
+            r['utterance_pitch_mean']   = row.get('res_utterance_pitch_mean')
+            r['snr']                    = row.get('res_snr')
             
             transcription = row.get('res_text')
             
@@ -318,27 +318,12 @@ def main():
     
     df = add_conversation_index(df)
     
-    
-    st_df =  pd.concat([
-        pd.read_csv(
-            f"data/raw/styletalk/annotations/eval.csv",
-            sep=",",            # delimiter
-            encoding="utf-8",   # or "latin1"
-            na_values=["NA", ""],
-        ),
-        pd.read_csv(
-            f"data/raw/styletalk/annotations/train.csv",
-            sep=",",            # delimiter
-            encoding="utf-8",   # or "latin1"
-            na_values=["NA", ""],
-        )    
-    ])
+    st_df =  pd.read_parquet("data/processed/styletalk_with_audio_stats.parquet")
     
     merged = add_styletalk(df, st_df)
     
     OUT_PQ = "data/processed/merged_PSC_StyleTalk_CLEANED.parquet"
     merged.to_parquet(OUT_PQ, index=False)
-    
     
     
 if __name__=="__main__":
