@@ -1,7 +1,13 @@
 import re
 from datasets import load_dataset
 import pandas as pd
+from pathlib import Path
+import wave
 
+# measuring stuff from styletalk wavs
+import librosa
+import numpy as np
+from scipy.signal import correlate
 
 def initialize_expresso_df():
     
@@ -82,13 +88,15 @@ def add_conversation_index(df_in):
     df['start_time'] = df['relative_audio_path'].apply(parse_start_time)
     df['end_time'] = df['relative_audio_path'].apply(parse_end_time)
     
+    temp_columns_to_drop = ['speakers', 'high_lvl_style', 'conv_num', 'start_time', 'end_time']
+    
     # Build conv_id from structured columns
-    df['_conv_id'] = df['speakers'] + '_' + df['high_lvl_style'] + '_' + df['conv_num']
+    df['conv_id'] = df['speakers'] + '_' + df['high_lvl_style'] + '_' + df['conv_num']
 
-    df = df.sort_values(['_conv_id', 'start_time']).reset_index(drop=True)
+    df = df.sort_values(['conv_id', 'start_time']).reset_index(drop=True)
 
-    df['turn_index'] = df.groupby('_conv_id').cumcount()
-    df['prev_filename'] = df.groupby('_conv_id')['relative_audio_path'].shift(1)
+    df['turn_index'] = df.groupby('conv_id').cumcount()
+    df['prev_filename'] = df.groupby('conv_id')['relative_audio_path'].shift(1)
     
     # look for files that are missing annotaitons
     print("Looking for filenames that don't have annotations, theses could cause interruptions in conversations.")
@@ -108,22 +116,201 @@ def add_conversation_index(df_in):
         start = parse_start_time(f)
         if start is not None:
             # only mark the first row at or after the missing file's start time
-            idx = df_split[(df_split['_conv_id'] == conv_id) & (df_split['start_time'] >= start)].index
+            idx = df_split[(df_split['conv_id'] == conv_id) & (df_split['start_time'] >= start)].index
             if len(idx) > 0:
                 df_split.loc[idx[0], '_is_split_point'] = True
 
-    df_split['_conv_id_split'] = df_split['_conv_id'] + '_part' + df_split.groupby('_conv_id')['_is_split_point'].transform(lambda x: x.cumsum().astype(str))
+    df_split['conv_id_split'] = df_split['conv_id'] + '_part' + df_split.groupby('conv_id')['_is_split_point'].transform(lambda x: x.cumsum().astype(str))
 
-    df_split['turn_index'] = df_split.groupby('_conv_id_split').cumcount()
-    df_split['prev_filename'] = df_split.groupby('_conv_id_split')['relative_audio_path'].shift(1)
+    df_split['turn_index'] = df_split.groupby('conv_id_split').cumcount()
+    df_split['prev_filename'] = df_split.groupby('conv_id_split')['relative_audio_path'].shift(1)
     
-    print(f"Original conversations: {df_split['_conv_id'].nunique()}")
-    print(f"Split conversations: {df_split['_conv_id_split'].nunique()}")
+    print(f"Original conversations: {df_split['conv_id'].nunique()}")
+    print(f"Split conversations: {df_split['conv_id_split'].nunique()}")
     
-    return df_split
+    df_final = df_split.drop(temp_columns_to_drop)
+    
+    return df_final
+
+
+#
+# StyleTalk incorporation
+#
+
+def parse_context_turns(context, diag_id):
+    """Split context string into one dict per A/B turn."""
+    
+    # Matches single uppercase letter + optional spaces + colon: "A :", "B:", etc.
+    SPEAKER_RE = re.compile(r'(?<!\w)([A-Z])\s*:')
+    
+    parts = SPEAKER_RE.split(context.strip())
+    # re.split with a capturing group gives: ['', 'A', ' text ', 'B', ' text ', ...]
+    turns = []
+    turn_idx = 0
+    i = 1
+    while i + 1 < len(parts):
+        speaker = parts[i].strip()
+        text    = parts[i + 1].strip()
+        if speaker and text:
+            turns.append({
+                'speaker_label': speaker,
+                'transcription': text,
+                'turn_index':    turn_idx,
+                'conv_id':      diag_id,
+            })
+            turn_idx += 1
+        i += 2
+    return turns
+
+
+def build_tags(emotion, speed, volume):
+    """Combine emotion/speed/volume into tags, omitting 'normal' values. Must be in a list to match PSC"""
+    parts = [
+        str(v).strip()
+        for v in [emotion, speed, volume]
+        if pd.notna(v) and str(v).strip() != ''
+    ]
+    return parts if parts else pd.NA
+
+
+def build_style_desc(emotion,speed,volume):
+    """Builds simple sentence style description. Must be in a list to match PSC"""
+    return [f"The speaker speaks in a {emotion} tone, at a {volume} volume, at a {speed} speed."]
 
 
 
+def add_styletalk(psc_df, st_df):
+    """Map styletalk columns onto psc columns for easier analysis and training"""
+    
+    MAIN_COLS = list(psc_df.columns)
+    TYPE_COL = 'record_type'
+
+    
+    
+    psc_df[TYPE_COL] = 'audio'
+    new_rows = []
+
+    for _, row in st_df.iterrows():
+        diag_id = str(row['diag_id'])
+        context = str(row.get('context', ''))
+        
+        curr_audio = row.get('curr_audio_id')
+
+        # 1. Context turns → text_only rows (no audio)
+        context_turns = []
+        if context and context.lower() != 'nan':
+            context_turns = parse_context_turns(context, diag_id)
+            for turn in context_turns:
+                r = {col: pd.NA for col in MAIN_COLS}
+                r[TYPE_COL]        = 'text_only'
+                r['source']        = 'styletalk'
+                r['conv_id']      = diag_id
+                r['turn_index']    = turn['turn_index']
+                
+                # this is to match the history columns with the curr audio column.
+                r['relative_audio_path']    = curr_audio
+                r['transcription'] = turn['transcription']
+                r['speakerid']     = turn['speaker_label']   # 'A' or 'B'
+                r['prev_filename'] = pd.NA
+                new_rows.append(r)
+
+        n_ctx = len(context_turns)  # offset so audio turns continue turn numbering
+
+        # 2. curr audio row
+        
+        
+        if pd.notna(curr_audio):
+            r = {col: pd.NA for col in MAIN_COLS}
+            
+            
+            r[TYPE_COL]                 = 'audio'
+            r['source']                 = 'styletalk'
+            r['conv_id']               = diag_id
+            r['turn_index']             = n_ctx
+            r['relative_audio_path']    = curr_audio
+            
+            curr_duration = get_wav_duration(Path("data/raw/styletalk/audio/" + curr_audio))
+            r['duration']               = curr_duration
+            
+            
+            
+            transcription = row.get('curr_text')
+            
+            cur_speaker_label = "A" if "A:" in transcription else "B" if "B:" in transcription else pd.NA
+            if pd.notna(cur_speaker_label):
+                transcription = transcription.replace(cur_speaker_label + ":", "")
+                
+            
+            r['transcription']          = transcription
+            r['speakerid']              = cur_speaker_label
+            r['speaking_rate']          = row.get('curr_speed')
+            
+            tags = build_tags(row.get('curr_emotion'),row.get('curr_speed'),row.get('curr_volume'))
+            r['basic_tags']             = tags
+            r['all_tags']               = tags
+            
+            r['text_description']       = build_style_desc(row.get('curr_emotion'),
+                                            row.get('curr_speed'),
+                                            row.get('curr_volume'))
+            
+            r['prev_filename']          = pd.NA
+            new_rows.append(r)
+
+        # 3. res audio row
+        res_audio = row.get('res_audio_id')
+        
+        if pd.notna(res_audio):
+            r = {col: pd.NA for col in MAIN_COLS}
+            r[TYPE_COL]             = 'audio'
+            r['source']             = 'styletalk'
+            r['conv_id']           = diag_id
+            r['turn_index']         = n_ctx + (1 if pd.notna(curr_audio) else 0)
+            r['relative_audio_path']= res_audio
+    
+            res_duration = get_wav_duration(Path("data/raw/styletalk/audio/" + res_audio))
+            r['duration']           = res_duration
+            
+            transcription = row.get('res_text')
+            
+            res_speaker_label = "A" if "A:" in transcription else "B" if "B:" in transcription else pd.NA
+            if pd.notna(res_speaker_label):
+                transcription = transcription.replace(res_speaker_label + ":", "")
+            
+            # no res speaker label in transcription but cur_speakerlabel had it (we know its flipped)
+            elif pd.notna(cur_speaker_label):
+                res_speaker_label = "A" if cur_speaker_label=="B" else "B"
+                    
+            r['transcription']          = transcription
+            r['speakerid']              = res_speaker_label
+    
+            r['speaking_rate']      = row.get('res_speed')
+            
+            tags = build_tags(row.get('res_emotion'),row.get('res_speed'),row.get('res_volume'))
+            r['basic_tags']             = tags
+            r['all_tags']               = tags
+            
+            r['text_description']       = build_style_desc(row.get('res_emotion'),
+                                            row.get('res_speed'),
+                                            row.get('res_volume'))
+            
+            # prev_filename = the curr audio (the immediately preceding turn)
+            r['prev_filename']      = curr_audio if pd.notna(curr_audio) else pd.NA
+            new_rows.append(r)
+
+    # merge
+    new_df = pd.DataFrame(new_rows, columns=MAIN_COLS + [TYPE_COL])
+    merged = pd.concat([psc_df, new_df], ignore_index=True)
+
+    all_cols = MAIN_COLS + [TYPE_COL]
+    for c in merged.columns:
+        if c not in all_cols:
+            all_cols.append(c)
+    merged = merged[all_cols]
+    
+    print(f"Done. {len(psc_df)} original + {len(new_df)} new = {len(merged)}")
+    print(f"\nrecord_type breakdown:\n{merged[TYPE_COL].value_counts().to_string()}")
+    
+    return merged
 
 
 def main():
@@ -131,7 +318,27 @@ def main():
     
     df = add_conversation_index(df)
     
-    df.to_csv("psc_annotations_expresso_conversation_CLEANED.csv", index=False)
+    
+    st_df =  pd.concat([
+        pd.read_csv(
+            f"data/raw/styletalk/annotations/eval.csv",
+            sep=",",            # delimiter
+            encoding="utf-8",   # or "latin1"
+            na_values=["NA", ""],
+        ),
+        pd.read_csv(
+            f"data/raw/styletalk/annotations/train.csv",
+            sep=",",            # delimiter
+            encoding="utf-8",   # or "latin1"
+            na_values=["NA", ""],
+        )    
+    ])
+    
+    merged = add_styletalk(df, st_df)
+    
+    OUT_PQ = "data/processed/merged_PSC_StyleTalk_CLEANED.parquet"
+    merged.to_parquet(OUT_PQ, index=False)
+    
     
     
 if __name__=="__main__":
