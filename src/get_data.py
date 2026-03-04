@@ -248,7 +248,7 @@ def download_emilia(parent_Path: Path, hf_token):
     
     
         
-def clone_paraspeechcaps(path, hf_token):
+def clone_paraspeechcaps(path, hf_token, include_all_audio=False):
     """Download helper scripts, annotations files, and select audio files for ParaSpeechCaps dataset.
     
     **Note**: Does not download all audio for ParaSpeechCaps, only the audio used for this project:
@@ -303,16 +303,17 @@ def clone_paraspeechcaps(path, hf_token):
     name = "expresso"
     download_tar_dataset(expresso_url, data_dir_audio, name, gz=False)
     
-    # Download ears
-    ears_audio = data_dir_audio / "EARS"
-    if ears_audio.exists():
-        logging.info("EARS audio folder already exists")
-    else:
-        download_ears(ears_audio)
-        
-    # Download subset of Emilia
-    emilia_audio_path = data_dir_audio / "Emilia"
-    download_emilia(emilia_audio_path, hf_token)
+    if include_all_audio:
+        # Download ears
+        ears_audio = data_dir_audio / "EARS"
+        if ears_audio.exists():
+            logging.info("EARS audio folder already exists")
+        else:
+            download_ears(ears_audio)
+            
+        # Download subset of Emilia
+        emilia_audio_path = data_dir_audio / "Emilia"
+        download_emilia(emilia_audio_path, hf_token)
 
 
 def main():
