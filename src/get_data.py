@@ -287,6 +287,9 @@ def clone_paraspeechcaps(path, hf_token, include_all_audio=False):
     expresso_url = "https://dl.fbaipublicfiles.com/textless_nlp/expresso/data/expresso.tar"
     name = "expresso"
     download_tar_dataset(expresso_url, data_dir_audio, name, gz=False)
+
+    expresso_root = data_dir_audio / name
+    preprocess_expresso(str(expresso_root))
     
     if include_all_audio:
         # Download ears
