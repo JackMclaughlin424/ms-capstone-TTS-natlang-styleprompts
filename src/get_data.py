@@ -212,7 +212,25 @@ def download_emilia(parent_Path: Path, hf_token):
         if extract:
             extract_tar(Path(local_path), final_path, remove_archive=True)
     
-    
+
+
+def preprocess_expresso(expresso_root):
+    def execute(cmd, cwd=None):
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=cwd)
+        
+        for line in process.stdout:
+            print(line, end="")
+        
+        # wait for process to finish and grab stderr
+        _, stderr = process.communicate()
+        if stderr:
+            print("STDERR:", stderr)
+        if process.returncode != 0:
+            raise RuntimeError(f"Command failed with exit code {process.returncode}: {cmd}")
+
+    execute(["python", "../expresso_vad_multi.py", expresso_root])
+
+    execute(["python", "../normalize.py"])
     
         
 def clone_paraspeechcaps(path, hf_token, include_all_audio=False):

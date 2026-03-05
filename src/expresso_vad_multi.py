@@ -1,7 +1,12 @@
+"""
+Adapted from Diwan et al.'s apply_expresso_vad.py, fixed bugs, added logging and multithreading.
+"""
 import argparse
 from pathlib import Path
 import pydub
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def load_vad_segments(vad_file):
     vad_segments = {}  # {filename: {channel: [(start, end)]}}
@@ -31,25 +36,32 @@ def load_vad_segments(vad_file):
     
     return vad_segments
 
+# lock so concurrent workers don't interleave their stderr warnings
+_print_lock = threading.Lock()
+
+def warn(msg):
+    with _print_lock:
+        print(msg, file=sys.stderr)
+
 def process_audio_file(wav_file, vad_segments, output_dir):
     filename = wav_file.stem
     if filename not in vad_segments:
-        print(f"Warning: VAD segments not found for {filename}", file=sys.stderr)
+        warn(f"Warning: VAD segments not found for {filename}")
         return 0
     
     # load before mkdir so we don't create empty dirs for broken files
     try:
         audio = pydub.AudioSegment.from_wav(str(wav_file))  # str() avoids Path issues on Windows
     except Exception as e:
-        print(f"Error loading {wav_file}: {e}", file=sys.stderr)
+        warn(f"Error loading {wav_file}: {e}")
         return 0
 
     if len(audio) == 0:
-        print(f"Warning: Empty audio in {wav_file}, skipping", file=sys.stderr)
+        warn(f"Warning: Empty audio in {wav_file}, skipping")
         return 0
 
     if audio.channels < 2:
-        print(f"Warning: Expected stereo, got {audio.channels} channel(s) in {wav_file}, skipping", file=sys.stderr)
+        warn(f"Warning: Expected stereo, got {audio.channels} channel(s) in {wav_file}, skipping")
         return 0
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -63,7 +75,7 @@ def process_audio_file(wav_file, vad_segments, output_dir):
     segments_written = 0
     for channel_name, audio_channel in channels.items():
         if channel_name not in vad_segments[filename]:
-            print(f"Warning: No VAD segments for {filename}/{channel_name}", file=sys.stderr)
+            warn(f"Warning: No VAD segments for {filename}/{channel_name}")
             continue
 
         for start, end in vad_segments[filename][channel_name]:
@@ -72,7 +84,7 @@ def process_audio_file(wav_file, vad_segments, output_dir):
 
             # guard against VAD timestamps exceeding actual audio length
             if start_ms >= len(audio_channel):
-                print(f"Warning: Segment {start}-{end}s out of range for {filename}/{channel_name}, skipping", file=sys.stderr)
+                warn(f"Warning: Segment {start}-{end}s out of range for {filename}/{channel_name}, skipping")
                 continue
 
             segment = audio_channel[start_ms:end_ms]
@@ -85,11 +97,12 @@ def process_audio_file(wav_file, vad_segments, output_dir):
 def main():
     parser = argparse.ArgumentParser(description="Apply VAD segmentation to Expresso audio files")
     parser.add_argument('expresso_root', type=Path, help='Root directory of Expresso dataset')
+    parser.add_argument('--workers', type=int, default=8, help='Number of parallel worker threads (default: 8)')
     args = parser.parse_args()
     
     vad_file = args.expresso_root / "VAD_segments.txt"
     input_dir = args.expresso_root / "audio_48khz" / "conversational"
-    output_dir = args.expresso_root / "audio_48khz" / "conversational_vad_segmented"
+    output_dir = args.expresso_root / "audio_48khz" / "conversational_vad_segmented_multi"
     
     if not vad_file.is_file():
         print(f"Error: VAD segments file not found at {vad_file}", file=sys.stderr)
@@ -102,16 +115,30 @@ def main():
 
     wav_files = list(input_dir.glob('**/*.wav'))
     total_files = len(wav_files)
-    print(f"Found {total_files} file(s), processing...")
+    print(f"Found {total_files} file(s), processing with {args.workers} workers...")
 
+    completed = 0
     total_segments = 0
-    for i, wav_file in enumerate(wav_files, 1):
+
+    def submit(wav_file):
         relative_path = wav_file.relative_to(input_dir)
         output_subdir = output_dir / relative_path.parent
-        segments_written = process_audio_file(wav_file, vad_segments, output_subdir)
-        total_segments += segments_written
-        # \r so we reuse the line instead of spamming
-        print(f"  [{i}/{total_files}] {wav_file.name} -> {segments_written} segment(s)", end='\r' if i < total_files else '\n')
+        return process_audio_file(wav_file, vad_segments, output_subdir)
+
+    with ThreadPoolExecutor(max_workers=args.workers) as executor:
+        futures = {executor.submit(submit, f): f for f in wav_files}
+        for future in as_completed(futures):
+            wav_file = futures[future]
+            completed += 1
+            try:
+                segments_written = future.result()
+                total_segments += segments_written
+            except Exception as e:
+                # shouldn't normally reach here since process_audio_file catches internally
+                warn(f"Error processing {wav_file}: {e}")
+                segments_written = 0
+            # \r so we reuse the line instead of spamming
+            print(f"  [{completed}/{total_files}] {wav_file.name} -> {segments_written} segment(s)", end='\r' if completed < total_files else '\n')
 
     print(f"Done. {total_segments} segment(s) written to {output_dir}")
 
