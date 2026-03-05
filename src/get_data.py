@@ -73,39 +73,6 @@ def download_tar_dataset(url: str, download_path, name: str, gz=True):
     extract_tar(archive_path, extract_dir, gz)
 
 
-def clone_libritts_p(path):
-    """Clone LibriTTS-P and download LibriTTS-R audio
-    
-    https://github.com/line/LibriTTS-P
-    """
-    data_dir = Path(path+"/libritts-p")
-
-    if data_dir.exists():
-        logging.info(f"LibriTTS-P already exists at {data_dir}")
-    else:
-        # LibriTTS-P (extra annotation data)
-        subprocess.run(
-            [
-                "git", "clone",
-                "https://github.com/line/LibriTTS-P.git",
-                str(data_dir),
-            ],
-            check=True,
-        )
-    
-    # LibriTTS-R (actual audio files)
-    data_dir_R = Path(path+"/libritts-r")
-    
-    url = "https://openslr.trmal.net/resources/141/dev_clean.tar.gz"
-    name = "dev_clean"
-    download_tar_dataset(url, data_dir_R, name)
-    
-    url = "https://openslr.trmal.net/resources/141/dev_other.tar.gz"
-    name = "dev_other"
-    download_tar_dataset(url, data_dir_R, name)
-    
-    ## TODO: add training set 
-
 
 def clone_styletalk(path):
     """
@@ -322,12 +289,6 @@ def main():
     )
 
     parser.add_argument(
-        "--libritts",
-        action="store_true",
-        help="Download the LibriTTS-P & R datasets",
-    )
-
-    parser.add_argument(
         "--styletalk",
         action="store_true",
         help="Download the styletalk dataset",
@@ -372,11 +333,8 @@ def main():
         ]
     )
 
-    if not (args.libritts or args.styletalk or args.paraspeechcaps or args.all):
+    if not (args.styletalk or args.paraspeechcaps or args.all):
         parser.error("Please specify at least one dataset to download.")
-
-    if args.libritts:
-        clone_libritts_p("data/raw/libritts")
 
     elif args.styletalk:
         clone_styletalk("data/raw/styletalk")
@@ -385,7 +343,6 @@ def main():
         clone_paraspeechcaps("data/raw/paraspeechcaps", args.hf_token)
         
     elif args.all:
-        clone_libritts_p("data/raw/libritts")
         clone_styletalk("data/raw/styletalk")
         clone_paraspeechcaps("data/raw/paraspeechcaps", args.hf_token)
 

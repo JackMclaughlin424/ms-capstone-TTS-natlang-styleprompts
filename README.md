@@ -30,3 +30,28 @@ src/get_data.py
 src/get_data.py --dataset paraspeechcaps
 
 ```
+
+#### Preprocessing ParaSpeechCaps:Expresso
+
+Complete the preprocessing steps outlined in the original README (skip the download step):
+
+Download the [Expresso dataset](https://github.com/facebookresearch/textlesslib/tree/main/examples/expresso/dataset) and place it at `${expresso_root}` such that the directory structure is as follows:
+```
+${expresso_root}/
+├── README.txt
+├── LICENSE.txt
+├── read_transcriptions.txt
+├── VAD_segments.txt
+├── splits/
+└── audio_48khz/
+    ├── conversational/
+    └── read/
+```
+Apply VAD segmentation to the Expresso conversational audio files, creating a `audio_48khz/conversational_vad_segmented` directory with the segmented audio files:
+```bash
+python ./audio_preprocessing/apply_expresso_vad.py "${expresso_root}"
+```
+Apply loudness normalization to all audio files using the following script, which will create a normalized copy of each `.wav` audio file overwriting the original file (the original file is saved with a `.backup` extension):
+```bash
+./audio_preprocessing/normalize_loudness.sh "${expresso_root}" # --show-total (optional, use to show total file count in progress bar, may be slower to start for large directories)
+```

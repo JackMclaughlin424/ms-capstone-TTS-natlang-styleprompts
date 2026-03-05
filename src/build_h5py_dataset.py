@@ -36,6 +36,9 @@ ATTR_COLUMNS = {
 IDX_TEXT_ONLY = -1   # record_type == 'text_only': no audio, intentional
 IDX_ERROR     = -2   # audio expected but missing or unreadable
 
+# for debugging!
+DEBUG_MAX_ROW = 100
+
 
 def load_wav(path: Path) -> tuple[np.ndarray, int]:
     """Return (waveform float32, sample_rate). Mixes down to mono."""
@@ -90,7 +93,7 @@ def build(df_path: str, audio_root_PSC: str, audio_root_ST: str,
     n_text_only  = 0
     idx          = 0
 
-    DEBUG_MAX_ROW = 100
+    
     DEBUG_CUR_ROW = 0
     with h5py.File(out_h5, "w") as hf:
         audio_grp = hf.create_group("audio")
@@ -98,7 +101,7 @@ def build(df_path: str, audio_root_PSC: str, audio_root_ST: str,
         hf.attrs["audio_root_PSC"] = str(audio_root_PSC)
         hf.attrs["audio_root_ST"]  = str(audio_root_ST)
 
-        for row_num, row in tqdm(df.iterrows(), total=len(df), desc="Writing audio"):
+        for row_num, row in tqdm(df.iterrows(), total=DEBUG_MAX_ROW if DEBUG_MAX_ROW != -1 else len(df), desc="Writing audio"):
             if DEBUG_CUR_ROW == DEBUG_MAX_ROW: break
             DEBUG_CUR_ROW += 1
 
@@ -174,7 +177,7 @@ def build(df_path: str, audio_root_PSC: str, audio_root_ST: str,
         df = df[:DEBUG_MAX_ROW].copy()
     else:
         df = df.copy()
-        
+
     df["hdf5_idx"] = hdf5_indices
     df.to_parquet(out_meta, index=False)
 
