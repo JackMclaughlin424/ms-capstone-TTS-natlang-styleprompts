@@ -228,9 +228,9 @@ def preprocess_expresso(expresso_root):
         if process.returncode != 0:
             raise RuntimeError(f"Command failed with exit code {process.returncode}: {cmd}")
 
-    execute(["python", "../expresso_vad_multi.py", expresso_root])
+    execute(["python", "data_helpers/expresso_vad_multi.py", expresso_root])
 
-    execute(["python", "../normalize.py"])
+    execute(["python", "data_helpers/normalize.py"])
     
         
 def clone_paraspeechcaps(path, hf_token, include_all_audio=False):

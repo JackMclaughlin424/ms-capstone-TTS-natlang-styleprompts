@@ -43,6 +43,6 @@ def normalize_directory(input_root: str, output_root: str, workers: int | None =
 
 
 if __name__ == "__main__":
-    input_dir = r"data/raw/paraspeechcaps/audio/expresso/audio_48khz/conversational_vad_segmented"
-    output_dir = r"data/processed/paraspeechcaps/expresso/audio_48khz/conversational_vad_segmented"
+    input_dir = r"../data/raw/paraspeechcaps/audio/expresso/audio_48khz/conversational_vad_segmented"
+    output_dir = r"../data/processed/paraspeechcaps/expresso/audio_48khz/conversational_vad_segmented"
     normalize_directory(input_dir, output_dir)

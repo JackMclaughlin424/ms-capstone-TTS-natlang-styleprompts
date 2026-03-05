@@ -46,7 +46,7 @@ def find_missing_annotations(df):
     valid_styles = set(df['high_lvl_style'].unique())
 
     wav_files = []
-    base_dir = "data/raw/paraspeechcaps/audio/expresso/audio_48khz/conversational_vad_segmented"
+    base_dir = "../data/raw/paraspeechcaps/audio/expresso/audio_48khz/conversational_vad_segmented"
 
     for root, dirs, files in os.walk(base_dir):
         # check if this directory is under a valid style folder
@@ -57,7 +57,7 @@ def find_missing_annotations(df):
             if file.endswith('.wav'):
                 wav_files.append(os.path.join(root, file))
 
-    prefix = "data/raw/paraspeechcaps/audio/expresso/"
+    prefix = "../data/raw/paraspeechcaps/audio/expresso/"
     wav_files_rel = [f.replace('\\', '/').removeprefix(prefix) for f in wav_files]
 
     existing = set(df['relative_audio_path'].values)
@@ -318,11 +318,11 @@ def main():
     
     df = add_conversation_index(df)
     
-    st_df =  pd.read_parquet("data/processed/styletalk_with_audio_stats.parquet")
+    st_df =  pd.read_parquet("../data/processed/styletalk_with_audio_stats.parquet")
     
     merged = add_styletalk(df, st_df)
     
-    OUT_PQ = "data/processed/merged_PSC_StyleTalk_CLEANED.parquet"
+    OUT_PQ = "../data/processed/merged_PSC_StyleTalk_CLEANED.parquet"
     merged.to_parquet(OUT_PQ, index=False)
     
     

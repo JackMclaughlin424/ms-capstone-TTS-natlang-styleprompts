@@ -50,7 +50,7 @@ def extract_features(filepath: Path) -> dict:
     }
 
 
-def load_styletalk(base_dir: str = "data/raw/styletalk") -> pd.DataFrame:
+def load_styletalk(base_dir: str = "../data/raw/styletalk") -> pd.DataFrame:
     splits = ["train", "eval"]
     dfs = []
     for split in splits:
@@ -61,7 +61,7 @@ def load_styletalk(base_dir: str = "data/raw/styletalk") -> pd.DataFrame:
 
 def enrich_with_audio_features(
     df: pd.DataFrame,
-    audio_root: str = "data/raw/styletalk/audio",
+    audio_root: str = "../data/raw/styletalk/audio",
     n_jobs: int = 8,
 ) -> pd.DataFrame:
     result_df = df.copy()
@@ -100,7 +100,7 @@ def enrich_with_audio_features(
 if __name__ == "__main__":
     st_df = load_styletalk()
 
-    test_path = Path("data/raw/styletalk/audio") / st_df["curr_audio_id"].iloc[0]
+    test_path = Path("../data/raw/styletalk/audio") / st_df["curr_audio_id"].iloc[0]
     print(f"Testing single file: {test_path}", flush=True)
     print(extract_features(test_path), flush=True)
     print("Single file OK", flush=True)
@@ -109,4 +109,4 @@ if __name__ == "__main__":
     print(st_df[["curr_duration", "curr_utterance_pitch_mean", "curr_snr",
                   "res_duration",  "res_utterance_pitch_mean",  "res_snr"]].describe())
 
-    st_df.to_parquet("data/processed/styletalk_with_audio_stats.parquet", index=False)
+    st_df.to_parquet("../data/processed/styletalk_with_audio_stats.parquet", index=False)

@@ -190,11 +190,11 @@ def build(df_path: str, audio_root_PSC: str, audio_root_ST: str,
 
 def parse_args():
     p = argparse.ArgumentParser(description="Build HDF5 audio archive + Parquet metadata index")
-    p.add_argument("--df",         default="data/processed/merged_PSC_StyleTalk_CLEANED.parquet",  help="Path to input DataFrame (.csv or .parquet)")
-    p.add_argument("--audio_root_PSC", default="data/raw/paraspeechcaps/audio/expresso",  help="Root directory to paraspeechcaps that relative_audio_path is relative to")
-    p.add_argument("--audio_root_ST", default="data/raw/styletalk/audio",  help="Root directory to StyleTalk that relative_audio_path is relative to")
-    p.add_argument("--out_h5",     default="data/processed/merged_audio.h5",          help="Output HDF5 path")
-    p.add_argument("--out_meta",   default="data/processed/merged_metadata.parquet",   help="Output Parquet path")
+    p.add_argument("--df",         default="../data/processed/merged_PSC_StyleTalk_CLEANED.parquet",  help="Path to input DataFrame (.csv or .parquet)")
+    p.add_argument("--audio_root_PSC", default="../data/raw/paraspeechcaps/audio/expresso",  help="Root directory to paraspeechcaps that relative_audio_path is relative to")
+    p.add_argument("--audio_root_ST", default="../data/raw/styletalk/audio",  help="Root directory to StyleTalk that relative_audio_path is relative to")
+    p.add_argument("--out_h5",     default="../data/processed/merged_audio.h5",          help="Output HDF5 path")
+    p.add_argument("--out_meta",   default="../data/processed/merged_metadata.parquet",   help="Output Parquet path")
     return p.parse_args()
 
 
