@@ -37,7 +37,7 @@ IDX_TEXT_ONLY = -1   # record_type == 'text_only': no audio, intentional
 IDX_ERROR     = -2   # audio expected but missing or unreadable
 
 # for debugging!
-DEBUG_MAX_ROW = 100
+DEBUG_MAX_ROW = -1
 
 
 def load_wav(path: Path) -> tuple[np.ndarray, int]:
