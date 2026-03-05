@@ -166,8 +166,8 @@ def run_normalization(segment_paths, segmented_dir, normalized_dir, workers):
 
 def main():
     parser = argparse.ArgumentParser(description="Segment and normalize Expresso conversational audio")
-    parser.add_argument('expresso_root', default=Path("../data/raw/paraspeechcaps/audio/expresso"),type=Path, help='Root directory of Expresso dataset')
-    parser.add_argument('output_root', default=Path("../data/processed/paraspeechcaps/audio/expresso"), type=Path, help='Root directory for processed output')
+    parser.add_argument('--expresso_root', default=Path("../data/raw/paraspeechcaps/audio/expresso"),type=Path, help='Root directory of Expresso dataset')
+    parser.add_argument('--output_root', default=Path("../data/processed/paraspeechcaps/audio/expresso"), type=Path, help='Root directory for processed output')
     parser.add_argument('--workers', type=int, default=8, help='Worker count for both stages (default: 8)')
     parser.add_argument('--skip-segmentation', action='store_true', help='Skip VAD segmentation, normalize existing segments only')
     args = parser.parse_args()
@@ -176,7 +176,7 @@ def main():
     input_dir = args.expresso_root / "audio_48khz" / "conversational"
 
     # keep intermediate segments separate so they're resumable/inspectable
-    segmented_dir = args.output_root / "segmented"
+    segmented_dir = args.output_root / "conversational_vad_segmented"
     normalized_dir = args.output_root / "normalized"
 
     if not args.skip_segmentation:

@@ -33,7 +33,7 @@ src/get_data.py --dataset paraspeechcaps
 
 #### Preprocessing ParaSpeechCaps:Expresso
 
-Complete the preprocessing steps outlined in the original README (skip the download step):
+Run the script ```src/data_helpers/preprocess_expresso.py``` to complete the preprocessing steps for Expresso outlined in the original paper's README (skips the download step):
 
 Download the [Expresso dataset](https://github.com/facebookresearch/textlesslib/tree/main/examples/expresso/dataset) and place it at `${expresso_root}` such that the directory structure is as follows:
 ```
@@ -55,3 +55,8 @@ Apply loudness normalization to all audio files using the following script, whic
 ```bash
 ./audio_preprocessing/normalize_loudness.sh "${expresso_root}" # --show-total (optional, use to show total file count in progress bar, may be slower to start for large directories)
 ```
+
+#### Preprocessing StyleTalk
+
+Run the script ```src/data_helpers/preprocess_styletalk.py``` to reformat the dataset to align with ParaSpeechCaps
+

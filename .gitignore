@@ -1,6 +1,7 @@
-data/
+data
 src/eda/figures/
 logs/
+__pycache__
+.vscode
 
 src/eda/gaps.csv
-.vscode
