@@ -167,7 +167,7 @@ def run_normalization(segment_paths, segmented_dir, normalized_dir, workers):
 def main():
     parser = argparse.ArgumentParser(description="Segment and normalize Expresso conversational audio")
     parser.add_argument('--expresso_root', default=Path("../data/raw/paraspeechcaps/audio/expresso"),type=Path, help='Root directory of Expresso dataset')
-    parser.add_argument('--output_root', default=Path("../data/processed/paraspeechcaps/audio/expresso"), type=Path, help='Root directory for processed output')
+    parser.add_argument('--output_root', default=Path("../data/processed/paraspeechcaps/audio/expresso/audio_48khz"), type=Path, help='Root directory for processed output')
     parser.add_argument('--workers', type=int, default=8, help='Worker count for both stages (default: 8)')
     parser.add_argument('--skip-segmentation', action='store_true', help='Skip VAD segmentation, normalize existing segments only')
     args = parser.parse_args()
@@ -176,8 +176,9 @@ def main():
     input_dir = args.expresso_root / "audio_48khz" / "conversational"
 
     # keep intermediate segments separate so they're resumable/inspectable
-    segmented_dir = args.output_root / "segmented_temp"
-    normalized_dir = args.output_root / "conversational_vad_segmented"  # this must be the final folder to match structure in dataset relative paths
+    # must match structure of original
+    segmented_dir = args.output_root  / "segmented_temp"
+    normalized_dir = args.output_root  / "conversational_vad_segmented"  # this must be the final folder to match structure in dataset relative paths
 
     if not args.skip_segmentation:
         if not vad_file.is_file():
