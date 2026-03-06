@@ -176,8 +176,8 @@ def main():
     input_dir = args.expresso_root / "audio_48khz" / "conversational"
 
     # keep intermediate segments separate so they're resumable/inspectable
-    segmented_dir = args.output_root / "conversational_vad_segmented"
-    normalized_dir = args.output_root / "normalized"
+    segmented_dir = args.output_root / "segmented_temp"
+    normalized_dir = args.output_root / "conversational_vad_segmented"  # this must be the final folder to match structure in dataset relative paths
 
     if not args.skip_segmentation:
         if not vad_file.is_file():

@@ -1,6 +1,7 @@
 data
 *.h5
 *.parquet
+*.wav
 *.csv
 *.png
 src/eda/figures/
