@@ -36,8 +36,6 @@ ATTR_COLUMNS = {
 IDX_TEXT_ONLY = -1   # record_type == 'text_only': no audio, intentional
 IDX_ERROR     = -2   # audio expected but missing or unreadable
 
-# for debugging!
-DEBUG_MAX_ROW = -1
 
 
 def load_wav(path: Path) -> tuple[np.ndarray, int]:
@@ -59,12 +57,14 @@ def safe_attr(value):
 
 
 def build(df_path: str, audio_root_PSC: str, audio_root_ST: str,
-          out_h5: str, out_meta: str):
+          out_h5: str, out_meta: str, DEBUG_MAX_ROW):
 
     df_path        = Path(df_path)
     audio_root_PSC = Path(audio_root_PSC)
     audio_root_ST  = Path(audio_root_ST)
-    out_h5         = Path(out_h5)
+
+    h5_path = Path(out_h5)
+    out_h5         = h5_path  if DEBUG_MAX_ROW < 0 else h5_path.parent / Path(h5_path.stem + f"_{str(DEBUG_MAX_ROW)}" + h5_path.suffix)
     out_meta       = Path(out_meta)
 
     SOURCE_ROOTS = {
@@ -195,9 +195,10 @@ def parse_args():
     p.add_argument("--audio_root_ST", default="../data/raw/styletalk/audio",  help="Root directory to StyleTalk that relative_audio_path is relative to")
     p.add_argument("--out_h5",     default="../data/processed/merged_audio.h5",          help="Output HDF5 path")
     p.add_argument("--out_meta",   default="../data/processed/merged_metadata.parquet",   help="Output Parquet path")
+    p.add_argument("--DEBUG_MAX_ROW",   default=-1,   help="DEBUGGING: number of rows to use for smaller sample")
     return p.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    build(args.df, args.audio_root_PSC, args.audio_root_ST, args.out_h5, args.out_meta)
+    build(args.df, args.audio_root_PSC, args.audio_root_ST, args.out_h5, args.out_meta, int(args.DEBUG_MAX_ROW))
