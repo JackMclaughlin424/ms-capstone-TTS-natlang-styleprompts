@@ -57,7 +57,9 @@ def safe_attr(value):
 
 
 def build(df_path: str, audio_root_PSC: str, audio_root_ST: str,
-          out_h5: str, out_meta: str, DEBUG_MAX_ROW, DEBUG_MAX_TURNS):
+          out_h5: str, out_meta: str
+          # Debugging/test parameters
+          , DEBUG_MAX_ROW, DEBUG_MAX_TURNS, DEBUG_PERCENT_EXPRESSO, SEED):
 
     df_path        = Path(df_path)
     audio_root_PSC = Path(audio_root_PSC)
@@ -107,23 +109,30 @@ def build(df_path: str, audio_root_PSC: str, audio_root_ST: str,
     
     if DEBUG_MAX_ROW >= 0 and DEBUG_MAX_TURNS >= 0:
         n_convos = DEBUG_MAX_ROW // (DEBUG_MAX_TURNS)
-        
-        # anchor on the last turn of each conversation, then walk backwards
-        last_turns = df[df["turn_index"] == max_turn_idx].head(n_convos)
+        n_expresso  = round(n_convos * DEBUG_PERCENT_EXPRESSO)
+        n_styletalk = n_convos - n_expresso  # remainder avoids floating point drift
         
         collected = set()
-        for _, row in last_turns.iterrows():
-            current = row
-            while current is not None:
-                collected.add(current["relative_audio_path"])
-                prev = current["prev_filename"]
-                if pd.isna(prev) or prev == "":
-                    break
-                match = df[df["relative_audio_path"] == prev]
-                current = match.iloc[0] if not match.empty else None
-        
+        for source_name, n in [("expresso", n_expresso), ("styletalk", n_styletalk)]:
+
+            # anchor on rows that are the max turn given my filters, then walk backwards to build conversations
+            last_turns = (
+                df[(df["turn_index"] == max_turn_idx) & (df["source"] == source_name)]
+                .sample(n=n, random_state=SEED)  # random so we don't always get the same convos
+            )
+            for _, row in last_turns.iterrows():
+                current = row
+                while current is not None:
+                    collected.add(current["relative_audio_path"])
+                    prev = current["prev_filename"]
+                    if pd.isna(prev) or prev == "":
+                        break
+                    match = df[df["relative_audio_path"] == prev]
+                    current = match.iloc[0] if not match.empty else None
+
         df = df[df["relative_audio_path"].isin(collected)].copy()
-        print(f"  Filtered to {n_convos} full conversations: {len(df):,} rows remain")
+        print(f"  Filtered to {n_convos} conversations "
+            f"({n_expresso} expresso, {n_styletalk} styletalk): {len(df):,} rows remain")
 
     # Build HDF5
 
@@ -132,6 +141,8 @@ def build(df_path: str, audio_root_PSC: str, audio_root_ST: str,
     n_text_only  = 0
     idx          = 0
 
+    # track errors
+    failed_convos = set()
     
     DEBUG_CUR_ROW = 0
     with h5py.File(out_h5, "w") as hf:
@@ -151,21 +162,29 @@ def build(df_path: str, audio_root_PSC: str, audio_root_ST: str,
                 hdf5_indices.append(IDX_TEXT_ONLY)
                 n_text_only += 1
                 continue
+                
+            if str(row.get("conv_id", "")) in failed_convos:
+                hdf5_indices.append(IDX_ERROR)
+                continue
 
             source     = row.get("source", "")
             audio_root = SOURCE_ROOTS.get(source)
 
             if audio_root is None:
                 print(f"  [ERROR] Unknown source '{source}' (row {row_num})")
+                failed_convos.add(str(row.get("conv_id", "")))
                 hdf5_indices.append(IDX_ERROR)
                 error_rows.append(row_num)
                 continue
 
-            rel_path  = row.get("relative_audio_path", "")
+            rel_path  = str(row.get("relative_audio_path", "")).strip()
             full_path = audio_root / rel_path
 
+            
             if not full_path.exists():
+                
                 print(f"  [ERROR] Missing file (row {row_num}): {full_path}")
+                failed_convos.add(str(row.get("conv_id", "")))
                 hdf5_indices.append(IDX_ERROR)
                 error_rows.append(row_num)
                 continue
@@ -174,6 +193,7 @@ def build(df_path: str, audio_root_PSC: str, audio_root_ST: str,
                 waveform, sr = load_wav(full_path)
             except Exception as exc:
                 print(f"  [ERROR] Unreadable file (row {row_num}): {full_path} -- {exc}")
+                failed_convos.add(str(row.get("conv_id", "")))
                 hdf5_indices.append(IDX_ERROR)
                 error_rows.append(row_num)
                 continue
@@ -209,7 +229,7 @@ def build(df_path: str, audio_root_PSC: str, audio_root_ST: str,
     print(f"  Unexpected errors    : {len(error_rows):,}  (hdf5_idx = {IDX_ERROR})")
     if error_rows:
         print(f"  Error row indices    : {error_rows}")
-
+        print(f"  Conversations abandoned : {len(failed_convos):,}  (all turns marked hdf5_idx = {IDX_ERROR})")
     # Save metadata + index
 
     if DEBUG_MAX_ROW != -1:
@@ -236,9 +256,11 @@ def parse_args():
     p.add_argument("--out_meta",   default="../data/processed/merged_metadata.parquet",   help="Output Parquet path")
     p.add_argument("--DEBUG_MAX_ROW",   default=-1,   help="DEBUGGING: number of rows to use for smaller sample")
     p.add_argument("--DEBUG_MAX_TURNS", default=-1, help="DEBUGGING: only include utterances from conversations with turn_index <= this value")
+    p.add_argument("--DEBUG_PERCENT_EXPRESSO", type=float, help="Fraction of conversations from expresso source (0.0 to 1.0)")
+    p.add_argument("--SEED", type=int, help="Random seed for conversation sampling")
     return p.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    build(args.df, args.audio_root_PSC, args.audio_root_ST, args.out_h5, args.out_meta, int(args.DEBUG_MAX_ROW), int(args.DEBUG_MAX_TURNS))
+    build(args.df, args.audio_root_PSC, args.audio_root_ST, args.out_h5, args.out_meta, int(args.DEBUG_MAX_ROW), int(args.DEBUG_MAX_TURNS), float(args.DEBUG_PERCENT_EXPRESSO), int(args.SEED))

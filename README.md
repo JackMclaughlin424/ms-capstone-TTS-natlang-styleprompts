@@ -57,7 +57,7 @@ src/get_data.py --dataset paraspeechcaps
 
     Example run:
     ```python
-    python .\build_h5py_dataset.py --audio_root_PSC '../data_TEMP/paraspeechcaps/audio/expresso' --audio_root_ST '../data_TEMP/styletalk/audio' --out_h5 '..\data_TEMP\merged_audio.h5' --out_meta '..\data_TEMP\merged_metadata.parquet' --DEBUG_MAX_ROW 500 --DEBUG_MAX_TURN 5
+    python .\build_h5py_dataset.py --df '../data_TEMP/merged_PSC_StyleTalk_CLEANED.parquet' --audio_root_PSC '../data_TEMP/paraspeechcaps/audio/expresso' --audio_root_ST '../data_TEMP/styletalk/audio' --out_h5 '..\data_TEMP\merged_audio.h5' --out_meta '..\data_TEMP\merged_metadata.parquet' --DEBUG_MAX_ROW 500 --DEBUG_MAX_TURN 5 --DEBUG_PERCENT_EXPRESSO .5 --SEED 42 
     ```
 
 ### 2. Model
