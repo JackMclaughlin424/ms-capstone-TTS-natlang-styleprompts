@@ -26,7 +26,7 @@ TEXT_COLUMNS = {
 
 # Columns to store as lightweight HDF5 dataset-level attrs (short scalars)
 ATTR_COLUMNS = {
-    "source", "speakerid", "name", "gender",
+    "source", "relative_audio_path", "speakerid", "name", "gender",
     "accent", "pitch", "speaking_rate", "noise",
     "utterance_pitch_mean", "snr", "tag_of_interest",
     "conv_id", "turn_index", "prev_filename", "record_type",
@@ -57,15 +57,23 @@ def safe_attr(value):
 
 
 def build(df_path: str, audio_root_PSC: str, audio_root_ST: str,
-          out_h5: str, out_meta: str, DEBUG_MAX_ROW):
+          out_h5: str, out_meta: str, DEBUG_MAX_ROW, DEBUG_MAX_TURNS):
 
     df_path        = Path(df_path)
     audio_root_PSC = Path(audio_root_PSC)
     audio_root_ST  = Path(audio_root_ST)
 
+    if DEBUG_MAX_ROW % DEBUG_MAX_TURNS > 0 and DEBUG_MAX_ROW >= 0 and DEBUG_MAX_TURNS >= 0:
+        # round down so we don't cut a conversation mid-turn
+        turns_per_convo = DEBUG_MAX_TURNS  
+        DEBUG_MAX_ROW = (DEBUG_MAX_ROW // turns_per_convo) * turns_per_convo
+        print(f"  DEBUG_MAX_ROW adjusted to {DEBUG_MAX_ROW:,} (nearest multiple of {turns_per_convo} turns)")
+
+
     h5_path = Path(out_h5)
     out_h5         = h5_path  if DEBUG_MAX_ROW < 0 else h5_path.parent / Path(h5_path.stem + f"_{str(DEBUG_MAX_ROW)}" + h5_path.suffix)
-    out_meta       = Path(out_meta)
+    meta_path = Path(out_meta)
+    out_meta       = meta_path if DEBUG_MAX_ROW < 0 else meta_path.parent / Path(meta_path.stem + f"_{str(DEBUG_MAX_ROW)}" + meta_path.suffix)
 
     SOURCE_ROOTS = {
         "expresso": audio_root_PSC,
@@ -85,6 +93,37 @@ def build(df_path: str, audio_root_PSC: str, audio_root_ST: str,
 
     attr_cols_present = ATTR_COLUMNS & set(df.columns)
 
+    # used in testing: Filtering max turns 
+    max_turn_idx = DEBUG_MAX_TURNS - 1
+
+    if DEBUG_MAX_TURNS >= 0 and "turn_index" in df.columns:
+        # keeps only utterances from short-enough conversations, -1 means no filter
+        df = df[df["turn_index"] <= max_turn_idx].copy() # turn_index is 0-based
+        print(f"  After DEBUG_MAX_TURNS={DEBUG_MAX_TURNS} filter: {len(df):,} rows remain")
+
+
+    
+    # filter to only full conversations
+    
+    if DEBUG_MAX_ROW >= 0 and DEBUG_MAX_TURNS >= 0:
+        n_convos = DEBUG_MAX_ROW // (DEBUG_MAX_TURNS)
+        
+        # anchor on the last turn of each conversation, then walk backwards
+        last_turns = df[df["turn_index"] == max_turn_idx].head(n_convos)
+        
+        collected = set()
+        for _, row in last_turns.iterrows():
+            current = row
+            while current is not None:
+                collected.add(current["relative_audio_path"])
+                prev = current["prev_filename"]
+                if pd.isna(prev) or prev == "":
+                    break
+                match = df[df["relative_audio_path"] == prev]
+                current = match.iloc[0] if not match.empty else None
+        
+        df = df[df["relative_audio_path"].isin(collected)].copy()
+        print(f"  Filtered to {n_convos} full conversations: {len(df):,} rows remain")
 
     # Build HDF5
 
@@ -196,9 +235,10 @@ def parse_args():
     p.add_argument("--out_h5",     default="../data/processed/merged_audio.h5",          help="Output HDF5 path")
     p.add_argument("--out_meta",   default="../data/processed/merged_metadata.parquet",   help="Output Parquet path")
     p.add_argument("--DEBUG_MAX_ROW",   default=-1,   help="DEBUGGING: number of rows to use for smaller sample")
+    p.add_argument("--DEBUG_MAX_TURNS", default=-1, help="DEBUGGING: only include utterances from conversations with turn_index <= this value")
     return p.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    build(args.df, args.audio_root_PSC, args.audio_root_ST, args.out_h5, args.out_meta, int(args.DEBUG_MAX_ROW))
+    build(args.df, args.audio_root_PSC, args.audio_root_ST, args.out_h5, args.out_meta, int(args.DEBUG_MAX_ROW), int(args.DEBUG_MAX_TURNS))

@@ -37,11 +37,31 @@ src/get_data.py --dataset paraspeechcaps
 
 ```
 
-#### Preprocessing ParaSpeechCaps:Expresso
+#### Preprocessing
 
-Run the script ```src/data_helpers/preprocess_expresso.py``` to complete the preprocessing steps for Expresso outlined in the original paper's README
+1. Preprocessing ParaSpeechCaps:Expresso
 
-#### Preprocessing StyleTalk
+    Run the script ```src/data_helpers/preprocess_expresso.py``` to complete the preprocessing steps for Expresso outlined in the original paper's README
 
-Run the script ```src/data_helpers/preprocess_styletalk.py``` to reformat the dataset to align with ParaSpeechCaps
+2. Preprocessing StyleTalk
 
+    Run the script ```src/data_helpers/preprocess_styletalk.py``` to reformat the dataset to align with ParaSpeechCaps
+
+3. Merge annotations
+
+    Run the script ```src/data_helpers/build_merged_annotation_dataset.py``` to combine the annotations for StyleTalk and ParaSpeechCaps into one dataset.
+
+4. Build HDF5 audio dataset
+
+    Run the script ```src/data_helpers/build_h5py_dataset.py``` to output one data file containing all training data used for the project, and one metadata file containing annotations and other metadata.
+
+    Example run:
+    ```python
+    python .\build_h5py_dataset.py --audio_root_PSC '../data_TEMP/paraspeechcaps/audio/expresso' --audio_root_ST '../data_TEMP/styletalk/audio' --out_h5 '..\data_TEMP\merged_audio.h5' --out_meta '..\data_TEMP\merged_metadata.parquet' --DEBUG_MAX_ROW 500 --DEBUG_MAX_TURN 5
+    ```
+
+### 2. Model
+
+#### Test Model (WIP)
+
+The Jupyter notebook ```src/style-prompt-generator/model.ipynb``` contains the model code and progressive sanity checks.
