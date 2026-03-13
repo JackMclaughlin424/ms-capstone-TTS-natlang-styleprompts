@@ -35,6 +35,27 @@ def initialize_expresso_df():
     
     df = df[df["relative_audio_path"].str.contains("conversational_vad_segmented")]
 
+    # dedup: keep the row with the longer text_description list (throw out the basic tag style desc.)
+    dupes_mask = df.duplicated(subset="relative_audio_path", keep=False)
+    dupes = df[dupes_mask]
+    if not dupes.empty:
+        print(f"Found {len(dupes)} duplicate rows across {dupes['relative_audio_path'].nunique()} paths -- keeping longest text_description per path")
+        
+        # longer list wins; ties go to the first occurrence
+        df["_desc_len"] = df["text_description"].apply(lambda x: len(x) if isinstance(x, list) else 0)
+        df = (
+            df.sort_values("_desc_len", ascending=False)
+              .drop_duplicates(subset="relative_audio_path", keep="first")
+              .drop(columns="_desc_len")
+              .reset_index(drop=True)
+        )
+    else:
+        print("No duplicate paths found")
+
+    # flatten: reduce text_description from list to its first string (keep only the most rich style description)
+    df["text_description"] = df["text_description"].apply(
+        lambda x: x[0] if isinstance(x, list) and len(x) > 0 else x
+    )
 
     return df 
 
@@ -208,7 +229,7 @@ def add_styletalk(psc_df, st_df):
                 r['turn_index']    = turn['turn_index']
                 
                 # this is to match the history columns with the curr audio column.
-                r['relative_audio_path']    = curr_audio
+                r['relative_audio_path']    = (curr_audio + str(turn['turn_index']))
                 r['transcription'] = turn['transcription']
                 r['speakerid']     = turn['speaker_label']   # 'A' or 'B'
                 r['prev_filename'] = pd.NA
@@ -218,7 +239,7 @@ def add_styletalk(psc_df, st_df):
 
         # 2. curr audio row
         
-        
+        cur_speaker_label = pd.NA
         if pd.notna(curr_audio):
             r = {col: pd.NA for col in MAIN_COLS}
             
@@ -227,7 +248,7 @@ def add_styletalk(psc_df, st_df):
             r['source']                 = 'styletalk'
             r['conv_id']               = diag_id
             r['turn_index']             = n_ctx
-            r['relative_audio_path']    = curr_audio
+            r['relative_audio_path'] = f"{curr_audio}_turn_{turn['turn_index']}"
             
             r['duration']               = row.get('curr_duration')
             r['utterance_pitch_mean']   = row.get('curr_utterance_pitch_mean')
@@ -235,9 +256,10 @@ def add_styletalk(psc_df, st_df):
             
             transcription = row.get('curr_text')
             
-            cur_speaker_label = "A" if "A:" in transcription else "B" if "B:" in transcription else pd.NA
-            if pd.notna(cur_speaker_label):
-                transcription = transcription.replace(cur_speaker_label + ":", "")
+            match = re.match(r'^([AB])\s*:\s*', transcription)
+            cur_speaker_label = match.group(1) if match else pd.NA
+            if match:
+                transcription = transcription[match.end():]
                 
             
             r['transcription']          = transcription
@@ -252,7 +274,7 @@ def add_styletalk(psc_df, st_df):
                                             row.get('curr_speed'),
                                             row.get('curr_volume'))
             
-            r['prev_filename']          = pd.NA
+            r['prev_filename'] = f"{curr_audio}_turn_{turn['turn_index']}" if turn['turn_index'] >= 0 else pd.NA
             new_rows.append(r)
 
         # 3. res audio row
