@@ -334,6 +334,9 @@ def add_styletalk(psc_df, st_df):
         if c not in all_cols:
             all_cols.append(c)
     merged = merged[all_cols]
+
+    # cleaning leading or trailing quotes
+    merged['text_description'] = merged['text_description'].str.strip('\'"')
     
     print(f"Done. {len(psc_df)} original + {len(new_df)} new = {len(merged)}")
     print(f"\nrecord_type breakdown:\n{merged[TYPE_COL].value_counts().to_string()}")

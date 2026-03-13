@@ -16,6 +16,8 @@ import pandas as pd
 import soundfile as sf
 from tqdm import tqdm
 
+import math
+from scipy.signal import resample_poly
 
 # Columns with long free-text – kept in Parquet, not HDF5 attrs
 TEXT_COLUMNS = {
@@ -55,9 +57,17 @@ def safe_attr(value):
         return float(value)
     return str(value)
 
+def resample_waveform(waveform: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
+    # resample_poly needs integer up/down factors, so reduce the ratio first
+    gcd = math.gcd(orig_sr, target_sr)
+    up   = target_sr // gcd
+    down = orig_sr   // gcd
+    resampled = resample_poly(waveform, up, down)
+    return resampled.astype(np.float32)
+
 
 def build(df_path: str, audio_root_PSC: str, audio_root_ST: str,
-          out_h5: str, out_meta: str
+          out_h5: str, out_meta: str, resample_rate: int | None
           # Debugging/test parameters
           , DEBUG_MAX_ROW, DEBUG_MAX_TURNS, DEBUG_PERCENT_EXPRESSO, SEED):
 
@@ -84,6 +94,10 @@ def build(df_path: str, audio_root_PSC: str, audio_root_ST: str,
 
     out_h5.parent.mkdir(parents=True, exist_ok=True)
     out_meta.parent.mkdir(parents=True, exist_ok=True)
+
+    if resample_rate is not None:
+        print(f"Resampling enabled: target {resample_rate} Hz  (files with native SR < target will error)")
+ 
 
     # Load DataFrame
     print(f"Loading DataFrame from {df_path} ...")
@@ -136,10 +150,11 @@ def build(df_path: str, audio_root_PSC: str, audio_root_ST: str,
 
     # Build HDF5
 
-    hdf5_indices = []
-    error_rows   = []
-    n_text_only  = 0
-    idx          = 0
+    hdf5_indices  = []
+    error_rows    = []
+    n_text_only   = 0
+    n_resampled   = 0
+    idx           = 0
 
     # track errors
     failed_convos = set()
@@ -150,6 +165,9 @@ def build(df_path: str, audio_root_PSC: str, audio_root_ST: str,
         hf.attrs["source_df"]      = str(df_path)
         hf.attrs["audio_root_PSC"] = str(audio_root_PSC)
         hf.attrs["audio_root_ST"]  = str(audio_root_ST)
+
+        if resample_rate is not None:
+            hf.attrs["resample_rate"] = resample_rate
 
         for row_num, row in tqdm(df.iterrows(), total=DEBUG_MAX_ROW if DEBUG_MAX_ROW != -1 else len(df), desc="Writing audio"):
             if DEBUG_CUR_ROW == DEBUG_MAX_ROW: break
@@ -163,10 +181,12 @@ def build(df_path: str, audio_root_PSC: str, audio_root_ST: str,
                 n_text_only += 1
                 continue
                 
+            # missing file somehow slipped by preprocessing, skip whole convo
             if str(row.get("conv_id", "")) in failed_convos:
                 hdf5_indices.append(IDX_ERROR)
                 continue
-
+            
+            # check audio file sources
             source     = row.get("source", "")
             audio_root = SOURCE_ROOTS.get(source)
 
@@ -176,11 +196,12 @@ def build(df_path: str, audio_root_PSC: str, audio_root_ST: str,
                 hdf5_indices.append(IDX_ERROR)
                 error_rows.append(row_num)
                 continue
+            
 
+            # check actual audio file
             rel_path  = str(row.get("relative_audio_path", "")).strip()
             full_path = audio_root / rel_path
 
-            
             if not full_path.exists():
                 
                 print(f"  [ERROR] Missing file (row {row_num}): {full_path}")
@@ -188,7 +209,8 @@ def build(df_path: str, audio_root_PSC: str, audio_root_ST: str,
                 hdf5_indices.append(IDX_ERROR)
                 error_rows.append(row_num)
                 continue
-
+            
+            # load waveform
             try:
                 waveform, sr = load_wav(full_path)
             except Exception as exc:
@@ -197,7 +219,22 @@ def build(df_path: str, audio_root_PSC: str, audio_root_ST: str,
                 hdf5_indices.append(IDX_ERROR)
                 error_rows.append(row_num)
                 continue
-
+            
+            # perform resampling if passed and not already sampled at that rate
+            if resample_rate is not None and sr != resample_rate:
+                # upsampling from a lower SR doesn't recover lost information, so we treat it as bad data
+                if sr < resample_rate:
+                    print(f"  [ERROR] Native SR {sr} Hz is below target {resample_rate} Hz (row {row_num}): {full_path}")
+                    failed_convos.add(str(row.get("conv_id", "")))
+                    hdf5_indices.append(IDX_ERROR)
+                    error_rows.append(row_num)
+                    continue
+ 
+                waveform = resample_waveform(waveform, sr, resample_rate)
+                sr = resample_rate
+                n_resampled += 1
+            
+            # build 'dataset' information for each waveform
             key = f"{idx:06d}"
             ds  = audio_grp.create_dataset(
                 key,
@@ -207,7 +244,7 @@ def build(df_path: str, audio_root_PSC: str, audio_root_ST: str,
                 compression_opts=4,
                 chunks=True,
             )
-            ds.attrs["sample_rate"]   = sr
+            ds.attrs["sample_rate"]   = sr  # updated during resampling if that happened
             ds.attrs["duration_sec"]  = len(waveform) / sr
             ds.attrs["original_path"] = str(rel_path)
             ds.attrs["df_row"]        = int(row_num)
@@ -230,6 +267,8 @@ def build(df_path: str, audio_root_PSC: str, audio_root_ST: str,
     if error_rows:
         print(f"  Error row indices    : {error_rows}")
         print(f"  Conversations abandoned : {len(failed_convos):,}  (all turns marked hdf5_idx = {IDX_ERROR})")
+    
+    
     # Save metadata + index
 
     if DEBUG_MAX_ROW != -1:
@@ -254,6 +293,9 @@ def parse_args():
     p.add_argument("--audio_root_ST", default="../data/raw/styletalk/audio",  help="Root directory to StyleTalk that relative_audio_path is relative to")
     p.add_argument("--out_h5",     default="../data/processed/merged_audio.h5",          help="Output HDF5 path")
     p.add_argument("--out_meta",   default="../data/processed/merged_metadata.parquet",   help="Output Parquet path")
+    p.add_argument("--resample_rate",  default=None, type=int,
+                   help="Resample all audio to this rate (Hz). Files with a native SR below this value will error.")
+
     p.add_argument("--DEBUG_MAX_ROW",   default=-1,   help="DEBUGGING: number of rows to use for smaller sample")
     p.add_argument("--DEBUG_MAX_TURNS", default=-1, help="DEBUGGING: only include utterances from conversations with turn_index <= this value")
     p.add_argument("--DEBUG_PERCENT_EXPRESSO", type=float, help="Fraction of conversations from expresso source (0.0 to 1.0)")
@@ -263,4 +305,13 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    build(args.df, args.audio_root_PSC, args.audio_root_ST, args.out_h5, args.out_meta, int(args.DEBUG_MAX_ROW), int(args.DEBUG_MAX_TURNS), float(args.DEBUG_PERCENT_EXPRESSO), int(args.SEED))
+    build(args.df
+          , args.audio_root_PSC
+          , args.audio_root_ST
+          , args.out_h5
+          , args.out_meta
+          , args.resample_rate
+          , int(args.DEBUG_MAX_ROW)
+          , int(args.DEBUG_MAX_TURNS)
+          , float(args.DEBUG_PERCENT_EXPRESSO)
+          , int(args.SEED))
