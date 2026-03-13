@@ -1,13 +1,7 @@
 import re
 from datasets import load_dataset
 import pandas as pd
-from pathlib import Path
-import wave
-
-# measuring stuff from styletalk wavs
-import librosa
-import numpy as np
-from scipy.signal import correlate
+import random
 
 def initialize_expresso_df():
     
@@ -42,7 +36,7 @@ def initialize_expresso_df():
         print(f"Found {len(dupes)} duplicate rows across {dupes['relative_audio_path'].nunique()} paths -- keeping longest text_description per path")
         
         # longer list wins; ties go to the first occurrence
-        df["_desc_len"] = df["text_description"].apply(lambda x: len(x) if isinstance(x, list) else 0)
+        df["_desc_len"] = df["text_description"].apply(lambda x: len(x) if hasattr(x, '__len__') and not isinstance(x, str) and len(x) > 0 else 0)
         df = (
             df.sort_values("_desc_len", ascending=False)
               .drop_duplicates(subset="relative_audio_path", keep="first")
@@ -54,7 +48,7 @@ def initialize_expresso_df():
 
     # flatten: reduce text_description from list to its first string (keep only the most rich style description)
     df["text_description"] = df["text_description"].apply(
-        lambda x: x[0] if isinstance(x, list) and len(x) > 0 else x
+        lambda x: x[0] if hasattr(x, '__len__') and not isinstance(x, str) and len(x) > 0 else x
     )
 
     return df 
@@ -195,8 +189,15 @@ def build_tags(emotion, speed, volume):
 
 
 def build_style_desc(emotion,speed,volume):
-    """Builds simple sentence style description. Must be in a list to match PSC"""
-    return [f"The speaker speaks in a {emotion} tone, at a {volume} volume, at a {speed} speed."]
+    """Builds simple sentence style description. Shuffle descriptions to better generalize"""
+    parts = [
+        f"in a {emotion} tone",
+        f"at a {volume} volume",
+        f"at a {speed} speed",
+    ]
+    random.shuffle(parts)
+    desc = ", ".join(parts)
+    return f"The speaker speaks {desc}."
 
 
 
@@ -219,6 +220,7 @@ def add_styletalk(psc_df, st_df):
 
         # 1. Context turns → text_only rows (no audio)
         context_turns = []
+        last_context_turn_id = pd.NA
         if context and context.lower() != 'nan':
             context_turns = parse_context_turns(context, diag_id)
             for turn in context_turns:
@@ -229,11 +231,15 @@ def add_styletalk(psc_df, st_df):
                 r['turn_index']    = turn['turn_index']
                 
                 # this is to match the history columns with the curr audio column.
-                r['relative_audio_path']    = (curr_audio + str(turn['turn_index']))
+                
+                r['relative_audio_path']    = f"{curr_audio}_turn_{turn['turn_index']}"
                 r['transcription'] = turn['transcription']
                 r['speakerid']     = turn['speaker_label']   # 'A' or 'B'
-                r['prev_filename'] = pd.NA
+                r['prev_filename'] = last_context_turn_id
                 new_rows.append(r)
+
+                # save for next turn
+                last_context_turn_id = r['relative_audio_path']
 
         n_ctx = len(context_turns)  # offset so audio turns continue turn numbering
 
@@ -248,7 +254,7 @@ def add_styletalk(psc_df, st_df):
             r['source']                 = 'styletalk'
             r['conv_id']               = diag_id
             r['turn_index']             = n_ctx
-            r['relative_audio_path'] = f"{curr_audio}_turn_{turn['turn_index']}"
+            r['relative_audio_path'] = curr_audio
             
             r['duration']               = row.get('curr_duration')
             r['utterance_pitch_mean']   = row.get('curr_utterance_pitch_mean')
@@ -274,7 +280,7 @@ def add_styletalk(psc_df, st_df):
                                             row.get('curr_speed'),
                                             row.get('curr_volume'))
             
-            r['prev_filename'] = f"{curr_audio}_turn_{turn['turn_index']}" if turn['turn_index'] >= 0 else pd.NA
+            r['prev_filename'] = last_context_turn_id
             new_rows.append(r)
 
         # 3. res audio row
