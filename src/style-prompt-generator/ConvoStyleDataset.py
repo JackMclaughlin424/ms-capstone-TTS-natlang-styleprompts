@@ -10,12 +10,12 @@ from torch.utils.data import Dataset
 
 # sources where the first few turns can be text-only (hdf5_idx == -1)
 _TEXT_ONLY_SOURCES = {"styletalk"}
- 
+
 # styletalk always has exactly this many text-only turns at the front of a chain
 _STYLETALK_TEXT_ONLY_TURNS = 3
 
 
-class AudioHDF5Dataset(Dataset):
+class ConvoStyleDataset(Dataset):
     """
     Streams waveforms from HDF5 alongside metadata. Each item is a
     conversation chain of `num_turns` utterances in chronological order,
@@ -44,7 +44,7 @@ class AudioHDF5Dataset(Dataset):
         self.num_turns  = num_turns
 
         meta = pd.read_parquet(meta_path)
-        
+
         # drop hard errors only; text-only rows (-1) are handled per-source below
         meta = meta[meta["hdf5_idx"] >= -1].reset_index(drop=True)
 
@@ -99,30 +99,30 @@ class AudioHDF5Dataset(Dataset):
         # only keep full chains -- shorter ones are incomplete conversations
         if len(chain) < self.num_turns:
             return None
- 
+
         source = str(anchor_row.get("source", "")).lower()
- 
+
         if source == "styletalk":
             return self._validate_styletalk_chain(chain)
         else:
             return self._validate_expresso_chain(chain)
-        
+
 
     def _validate_styletalk_chain(self, chain: list) -> Optional[list]:
         # styletalk: first N turns must be text-only, the rest must have audio
         for turn_pos, row in enumerate(chain):
             hdf5_idx = int(row["hdf5_idx"])
             is_text_only_slot = turn_pos < _STYLETALK_TEXT_ONLY_TURNS
- 
+
             if is_text_only_slot and hdf5_idx != -1:
                 # we expect text-only here; a real audio file is unexpected but not fatal
                 pass
             elif not is_text_only_slot and hdf5_idx == -1:
                 # audio turns must actually have audio
                 return None
- 
+
         return chain
- 
+
     def _validate_expresso_chain(self, chain: list) -> Optional[list]:
         # expresso: no text-only rows allowed anywhere in the chain
         for row in chain:
@@ -156,25 +156,25 @@ class AudioHDF5Dataset(Dataset):
 
     def __getitem__(self, i):
         chain = self._chains[i]
- 
+
         utterances = []
         for row in chain:
             hdf5_idx  = int(row["hdf5_idx"])
             is_text_only = hdf5_idx == -1
- 
+
             if is_text_only:
                 # no waveform to load; downstream should check this flag
                 wav_tensor  = None
                 sample_rate = self.sr
             else:
                 wav, sample_rate = self._load_waveform(hdf5_idx)
- 
+
                 if self.transform is not None:
                     wav = self.transform(wav)
- 
+
                 wav        = self._pad_or_trim(wav)
                 wav_tensor = torch.from_numpy(wav)
- 
+
             utt = {
                 "audio":               wav_tensor,
                 "sample_rate":         sample_rate,
@@ -182,16 +182,17 @@ class AudioHDF5Dataset(Dataset):
                 "turn_index":          int(row["turn_index"]),
                 "text_only":           is_text_only,
                 "relative_audio_path": row.name,  # relative_audio_path is the index
+                "speaker_id" : row["speakerid"]
             }
- 
+
             for col in self._extra_cols:
                 val = row.get(col, "")
                 if isinstance(val, float) and np.isnan(val):
                     val = ""
                 utt[col] = val
- 
+
             utterances.append(utt)
- 
+
         return utterances  # list of dicts, chronological order
 
     def __del__(self):
@@ -208,12 +209,12 @@ def collate_pad(batch):
     of utterance dicts (one per turn). Returns a dict where 'audio' is
     (B, T, max_wav_len), 'lengths' is (B, T), and 'text_only' is (B, T) bool.
     Text-only turns (audio=None) are left as zero-padded rows in the tensor.
- 
+
     Use as: DataLoader(..., collate_fn=collate_pad)
     """
     B = len(batch)
     T = len(batch[0])
- 
+
     # only consider turns that actually have audio when computing max length
     audio_lengths = [
         utt["audio"].shape[0]
@@ -222,11 +223,11 @@ def collate_pad(batch):
         if utt["audio"] is not None
     ]
     max_len = max(audio_lengths) if audio_lengths else 0
- 
+
     padded    = torch.zeros(B, T, max_len, dtype=torch.float32)
     lengths   = torch.zeros(B, T, dtype=torch.long)
     text_only = torch.zeros(B, T, dtype=torch.bool)
- 
+
     for b, chain in enumerate(batch):
         for t, utt in enumerate(chain):
             if utt["audio"] is not None:
@@ -234,11 +235,109 @@ def collate_pad(batch):
                 padded[b, t, :L] = utt["audio"]
                 lengths[b, t]    = L
             text_only[b, t] = utt["text_only"]
- 
+
     meta_keys = [k for k in batch[0][0] if k not in ("audio", "text_only")]
     out = {k: [[utt[k] for utt in chain] for chain in batch] for k in meta_keys}
- 
+
     out["audio"]     = padded     # (B, T, max_wav_len)
     out["lengths"]   = lengths    # (B, T)
     out["text_only"] = text_only  # (B, T)
     return out
+
+
+def main():
+    """
+    Sanity checks for the ConvoStyleDataset class.
+    """
+    from torch.utils.data import DataLoader
+
+    # H5_PATH     = "/content/drive/MyDrive/capstone/data/merged_audio_500.h5" # <--- UPDATE THIS PATH
+    # META_PATH   = "/content/drive/MyDrive/capstone/data/merged_metadata_500.parquet" # <--- UPDATE THIS PATH
+    H5_PATH     = "../data_TEMP/merged_audio_500.h5" # <--- UPDATE THIS PATH
+    META_PATH   = "../data_TEMP/merged_metadata_500.parquet" # <--- UPDATE THIS PATH
+    BATCH_SIZE = 1      # Reduced batch size for memory optimization. Try 1 first. <--- MODIFIED
+    SAMPLE_RATE = 16_000
+    MAX_NUM_TURNS = 5
+
+    dataset = ConvoStyleDataset(
+        h5_path=H5_PATH,
+        meta_path=META_PATH,
+        meta_columns=["transcription"],
+        sample_rate=SAMPLE_RATE,
+        num_turns=MAX_NUM_TURNS # Changed from 5 to 1 to allow loading single-turn utterances for diagnosis
+        # max_len_sec=10.0, # Uncomment and adjust this value (e.g., 10 seconds) for further memory optimization.
+        # no max_len_sec -- collate_pad handles variable lengths
+    )
+
+    loader = DataLoader(
+        dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        collate_fn=collate_pad,
+        num_workers=0,
+    )
+
+
+    # data batch test
+    batch = next(iter(loader))
+    print(batch.keys())
+    audio   = batch["audio"]           # (B, T, max_wav_len)
+    lengths = batch["lengths"]         # (B, T)
+    texts   = batch["transcription"]   # list[B][T]
+    wav_files = batch["relative_audio_path"]
+    speakers = batch["speaker_id"]
+
+    B, T, max_wav_len = audio.shape
+
+    print(f"audio shape   : {tuple(audio.shape)}  (batch, turns, samples)")
+    print(f"audio dtype   : {audio.dtype}")
+    print(f"lengths shape : {tuple(lengths.shape)}")
+    print()
+
+    # print each chain as a conversation so ordering is easy to eyeball
+    for b in range(B):
+        print(f"Chain {b}:")
+        for t in range(T):
+            L     = lengths[b, t].item()
+            dur_s = L / dataset.sr
+            text  = texts[b][t]
+            file = wav_files[b][t]
+            spker = speakers[b][t]
+            display = text[:77] + "..." if len(text) > 80 else text
+            print(f"Spk {spker}, turn {t+1}  |  {L} samples ({dur_s:.2f}s)  |  {display!r}  | {file}")
+        print()
+
+    # verify no padding bleeds into real audio for any turn
+    for b in range(B):
+        for t in range(T):
+            L    = lengths[b, t].item()
+            tail = audio[b, t, L:]
+            if tail.numel() > 0:
+                assert tail.abs().max() == 0, f"chain {b} turn {t}: non-zero past length {L}"
+
+    print("Padding check passed")
+
+    # grab one chain directly from the dataset (no collation needed for inspection)
+    chain_idx = 0
+    chain = dataset[chain_idx]
+
+    print(f"Total chains in dataset: {len(dataset)}  (num_turns={dataset.num_turns})")
+    print(f"\nChain {chain_idx}  ({len(chain)} turns)")
+    print("-" * 60)
+
+    for utt in chain:
+        dur_s = utt["audio"].shape[0] / utt["sample_rate"]
+        print(f"spker {utt["speaker_id"]} |   turn {utt['turn_index']}  |  hdf5_idx={utt['hdf5_idx']}  |  {utt['audio'].shape[0]} samples ({dur_s:.2f}s)")
+        for k, v in utt.items():
+            if k in {"audio", "sample_rate", "hdf5_idx", "turn_index"}:
+                continue
+            display = str(v)
+            if len(display) > 80:
+                display = display[:77] + "..."
+            print(f"    {k}: {display}")
+
+    print("-" * 60)
+
+
+if __name__=="__main__":
+    main()
