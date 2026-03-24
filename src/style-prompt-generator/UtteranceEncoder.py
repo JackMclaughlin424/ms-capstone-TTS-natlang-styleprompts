@@ -51,8 +51,13 @@ def encode_audio_inputs(audio, lengths, processor):
 
 class DualModalityEmbedder(nn.Module):
 
-    def __init__(self, text_encoder, audio_encoder, tokenizer, processor):
+    def __init__(self, text_encoder_model_pretrained, audio_encoder_model_pretrained, tokenizer, processor):
         super().__init__()
+
+        
+        text_encoder  = ModalityEncoder(text_encoder_model_pretrained,  SelfAttentivePooling(768).half())
+        audio_encoder = ModalityEncoder(audio_encoder_model_pretrained, SelfAttentivePooling(768).half())
+
         self.text_encoder  = text_encoder
         self.audio_encoder = audio_encoder
         self.tokenizer     = tokenizer
@@ -76,7 +81,9 @@ class DualModalityEmbedder(nn.Module):
         B, T, _ = audio.shape
         d_model  = 768
 
-        out = torch.zeros(B, T, d_model, dtype=audio.dtype, device=audio.device)
+        device   = audio.device
+
+        out = torch.zeros(B, T, d_model, dtype=audio.dtype, device=device)
 
         for t in range(T):
             # skip turns where every item in the batch has no audio
@@ -91,14 +98,15 @@ class DualModalityEmbedder(nn.Module):
                 hidden = self.audio_encoder.backbone(**inputs).last_hidden_state
 
             T_out    = hidden.shape[1]
-            raw_mask = (torch.arange(audio_t.shape[1], device=device).unsqueeze(0)
-                        < lengths_t.unsqueeze(1).to(device)).float()
+            raw_mask = (torch.arange(audio_t.shape[1], device = device).unsqueeze(0)
+                        < lengths_t.unsqueeze(1).to(device = device)).float()
             mask_ds  = F.interpolate(raw_mask.unsqueeze(1), size=T_out, mode="nearest").squeeze(1).bool()
 
             emb = self.audio_encoder(hidden, mask_ds)  # (B, d)
             out[:, t, :] = emb
 
         return out  # (B, T, d)
+
 
     def forward(self, audio, lengths, texts, text_only=None):
         text_emb  = self.embed_text(texts)

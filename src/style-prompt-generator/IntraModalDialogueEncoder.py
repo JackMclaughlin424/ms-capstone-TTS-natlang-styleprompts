@@ -174,6 +174,7 @@ class ContextAwareTransformer(nn.Module):
         # TransformerEncoder stacks multiple EncoderLayers
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_encoder_layers)
 
+
     def forward(self, turn_embeddings: torch.Tensor):
         # Input `turn_embeddings` is expected to be (Batch_Size, Num_Turns, Embedding_Dim) which is (B, S, E)
 
