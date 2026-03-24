@@ -1,0 +1,480 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+from typing import List, Optional
+
+class SelfAttentivePooling(nn.Module):
+
+    def __init__(self, dim: int):
+        super().__init__()
+        self.scorer = nn.Linear(dim, 1, bias=False)
+
+    def forward(self, hidden: torch.Tensor, mask: torch.Tensor = None) -> torch.Tensor:
+        # hidden: (B, T, d),  mask: (B, T) -- 1 for real tokens, 0 for padding
+        scores = self.scorer(hidden).squeeze(-1)  # (B, T)
+
+        if mask is not None:
+            # push padding positions to -inf so softmax zeroes them out
+            scores = scores.masked_fill(~mask.bool(), float("-inf"))
+
+        weights = F.softmax(scores, dim=-1)
+        return (weights.unsqueeze(-1) * hidden).sum(dim=1)  # (B, d)
+    
+class ModalityEncoder(nn.Module):
+
+    def __init__(self, backbone, pooler):
+        super().__init__()
+        self.backbone = backbone
+        self.pooler   = pooler
+
+    def forward(self, hidden: torch.Tensor, mask: torch.Tensor = None) -> torch.Tensor:
+        return self.pooler(hidden, mask)  # (B, d)
+    
+
+def encode_text_inputs(texts, tokenizer):
+    return tokenizer(
+        texts,
+        return_tensors="pt",
+        padding=True,
+        truncation=True,
+        max_length=512,
+    )
+
+def encode_audio_inputs(audio, lengths, processor, sample_rate):
+    inputs = processor(
+        list(audio.cpu().numpy()),
+        sampling_rate=sample_rate,
+        return_tensors="pt",
+        padding=True,
+    )
+    return inputs, lengths
+
+
+class DualModalityEmbedder(nn.Module):
+
+    def __init__(self, text_encoder_model_pretrained, audio_encoder_model_pretrained
+                 , tokenizer, processor
+                 , SAMPLE_RATE):
+        super().__init__()
+
+        
+        text_encoder  = ModalityEncoder(text_encoder_model_pretrained,  SelfAttentivePooling(768))
+        audio_encoder = ModalityEncoder(audio_encoder_model_pretrained, SelfAttentivePooling(768))
+
+        self.text_encoder  = text_encoder
+        self.audio_encoder = audio_encoder
+        self.tokenizer     = tokenizer
+        self.processor     = processor
+        self.SAMPLE_RATE = SAMPLE_RATE
+
+    def embed_text(self, texts):
+        # texts is list[B][T] -- flatten to a single batch so the encoder sees B*T items
+        B = len(texts)
+        T = len(texts[0])
+        flat_texts = [texts[b][t] for b in range(B) for t in range(T)]
+
+        tokens = encode_text_inputs(flat_texts, self.tokenizer)
+        with torch.no_grad():
+            hidden = self.text_encoder.backbone(**tokens).last_hidden_state
+        flat_emb = self.text_encoder(hidden, tokens["attention_mask"])  # (B*T, d)
+
+        return flat_emb.view(B, T, -1)  # (B, T, d)
+
+    def embed_audio(self, audio, lengths, text_only=None):
+        # audio: (B, T, samples), lengths: (B, T)
+        B, T, _ = audio.shape
+        d_model  = 768
+
+        device   = audio.device
+
+        out = torch.zeros(B, T, d_model, dtype=audio.dtype, device=device)
+
+        for t in range(T):
+            # skip turns where every item in the batch has no audio
+            if text_only is not None and text_only[:, t].all():
+                continue
+
+            audio_t   = audio[:, t, :]    # (B, samples)
+            lengths_t = lengths[:, t]     # (B,)
+
+            inputs, lengths_t = encode_audio_inputs(audio_t, lengths_t, self.processor, self.SAMPLE_RATE)
+            with torch.no_grad():
+                hidden = self.audio_encoder.backbone(**inputs).last_hidden_state
+
+            T_out    = hidden.shape[1]
+            raw_mask = (torch.arange(audio_t.shape[1], device = device).unsqueeze(0)
+                        < lengths_t.unsqueeze(1).to(device = device)).float()
+            mask_ds  = F.interpolate(raw_mask.unsqueeze(1), size=T_out, mode="nearest").squeeze(1).bool()
+
+            emb = self.audio_encoder(hidden, mask_ds)  # (B, d)
+            out[:, t, :] = emb
+
+        return out  # (B, T, d)
+
+
+    def forward(self, audio, lengths, texts, text_only=None):
+        text_emb  = self.embed_text(texts)
+        audio_emb = self.embed_audio(audio, lengths, text_only)
+        return text_emb, audio_emb  # both (B, T, d)
+
+
+class IntraSpeakerTransformer(nn.Module):
+    def __init__(self, d_model: int, nhead: int, num_encoder_layers: int
+                 , dim_feedforward: int, dropout: float = 0.1):
+        super().__init__()
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            batch_first=True
+        )
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_encoder_layers)
+
+    def forward(self, turn_embeddings: torch.Tensor, speaker_ids_list: List[List[str]]):
+        B, seq_len, _ = turn_embeddings.shape
+        device = turn_embeddings.device
+
+        # Generate causal mask and ensure it has the same dtype as turn_embeddings
+        causal_mask = nn.Transformer.generate_square_subsequent_mask(seq_len).to(device).to(turn_embeddings.dtype)
+
+        # Create numerical speaker IDs for the current batch
+        numerical_speaker_ids = []
+        global_speaker_id_map = {}
+        next_id = 0
+
+        for b_idx in range(B):
+            chain_speakers = speaker_ids_list[b_idx]
+            chain_numerical_ids = []
+            for speaker_str in chain_speakers:
+                if speaker_str not in global_speaker_id_map:
+                    global_speaker_id_map[speaker_str] = next_id
+                    next_id += 1
+                chain_numerical_ids.append(global_speaker_id_map[speaker_str])
+            numerical_speaker_ids.append(chain_numerical_ids)
+
+        # Convert to tensor (B, seq_len)
+        speaker_ids_tensor = torch.tensor(numerical_speaker_ids, dtype=torch.long, device=device)
+
+        # Create same speaker boolean mask (B, seq_len, seq_len)
+        same_speaker_bool_mask = (speaker_ids_tensor.unsqueeze(2) == speaker_ids_tensor.unsqueeze(1))
+
+        # Intra-speaker mask: allow attention within the same speaker, block attention to different speakers
+        # Additive mask: 0 for allowed, -inf for blocked
+        inf_val = torch.finfo(turn_embeddings.dtype).min
+        # Explicitly cast 0. to the correct dtype for torch.where
+        zero_tensor = torch.tensor(0., dtype=turn_embeddings.dtype, device=device)
+        intra_speaker_additive_mask = torch.where(same_speaker_bool_mask, zero_tensor, inf_val)
+
+        # Combine causal mask with intra-speaker mask
+        # Causal mask is (S, S), intra_speaker_additive_mask is (B, S, S)
+        # Unsqueezing causal_mask to (1, S, S) allows broadcasting
+        final_mask = causal_mask.unsqueeze(0) + intra_speaker_additive_mask
+
+        # Reshape the mask to (B * nhead, S, S)
+        nhead_local = self.transformer_encoder.layers[0].self_attn.num_heads
+        final_mask = final_mask.unsqueeze(1).expand(-1, nhead_local, -1, -1).reshape(B * nhead_local, seq_len, seq_len)
+
+        output = self.transformer_encoder(turn_embeddings, mask=final_mask)
+        return output
+
+
+
+class InterSpeakerTransformer(nn.Module):
+    def __init__(self, d_model: int, nhead: int, num_encoder_layers: int
+                 , dim_feedforward: int, dropout: float = 0.1):
+        super().__init__()
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            batch_first=True
+        )
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_encoder_layers)
+
+    def forward(self, turn_embeddings: torch.Tensor, speaker_ids_list: List[List[str]]):
+        B, seq_len, _ = turn_embeddings.shape
+        device = turn_embeddings.device
+
+        # Generate causal mask and ensure it has the same dtype as turn_embeddings
+        causal_mask = nn.Transformer.generate_square_subsequent_mask(seq_len).to(device).to(turn_embeddings.dtype)
+
+        # Create numerical speaker IDs for the current batch
+        numerical_speaker_ids = []
+        global_speaker_id_map = {}
+        next_id = 0
+
+        for b_idx in range(B):
+            chain_speakers = speaker_ids_list[b_idx]
+            chain_numerical_ids = []
+            for speaker_str in chain_speakers:
+                if speaker_str not in global_speaker_id_map:
+                    global_speaker_id_map[speaker_str] = next_id
+                    next_id += 1
+                chain_numerical_ids.append(global_speaker_id_map[speaker_str])
+            numerical_speaker_ids.append(chain_numerical_ids)
+
+        # Convert to tensor (B, seq_len)
+        speaker_ids_tensor = torch.tensor(numerical_speaker_ids, dtype=torch.long, device=device)
+
+        # Create same speaker boolean mask (B, seq_len, seq_len)
+        same_speaker_bool_mask = (speaker_ids_tensor.unsqueeze(2) == speaker_ids_tensor.unsqueeze(1))
+
+        # Inter-speaker mask: allow attention between different speakers, block attention to the same speaker
+        # Additive mask: 0 for allowed, -inf for blocked
+        inf_val = torch.finfo(turn_embeddings.dtype).min
+        # Explicitly cast 0. to the correct dtype for torch.where
+        zero_tensor = torch.tensor(0., dtype=turn_embeddings.dtype, device=device)
+        inter_speaker_additive_mask = torch.where(~same_speaker_bool_mask, zero_tensor, inf_val)
+
+        # Combine causal mask with inter-speaker mask
+        final_mask = causal_mask.unsqueeze(0) + inter_speaker_additive_mask
+
+        # Reshape the mask to (B * nhead, S, S)
+        nhead_local = self.transformer_encoder.layers[0].self_attn.num_heads
+        final_mask = final_mask.unsqueeze(1).expand(-1, nhead_local, -1, -1).reshape(B * nhead_local, seq_len, seq_len)
+
+        output = self.transformer_encoder(turn_embeddings, mask=final_mask)
+        return output
+    
+class SpeakerAwareTransformer(nn.Module):
+    def __init__(self, d_model: int, nhead: int, num_encoder_layers: int, dim_feedforward: int, dropout: float = 0.1):
+        super().__init__()
+        # Instantiate separate ContextAwareTransformer for intra-speaker masking
+        self.intra_transformer = IntraSpeakerTransformer(
+            d_model=d_model,
+            nhead=nhead,
+            num_encoder_layers=num_encoder_layers,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout
+        )
+        # Instantiate separate ContextAwareTransformer for inter-speaker masking
+        self.inter_transformer = InterSpeakerTransformer(
+            d_model=d_model,
+            nhead=nhead,
+            num_encoder_layers=num_encoder_layers,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout
+        )
+
+    def forward(self, turn_embeddings: torch.Tensor, speaker_ids_list: List[List[str]]):
+        # Pass through the intra-speaker context aware transformer
+        intra_emb = self.intra_transformer(
+            turn_embeddings,
+            speaker_ids_list=speaker_ids_list
+        )
+
+        # Pass through the inter-speaker context aware transformer
+        inter_emb = self.inter_transformer(
+            turn_embeddings,
+            speaker_ids_list=speaker_ids_list
+        )
+        return intra_emb, inter_emb
+    
+
+class ContextAwareTransformer(nn.Module):
+    def __init__(self, d_model: int, nhead: int, num_encoder_layers: int, dim_feedforward: int, dropout: float = 0.1):
+        super().__init__()
+        # TransformerEncoderLayer is the basic building block for the encoder
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            batch_first=True # Set batch_first to True for (B, S, E) input
+        )
+        # TransformerEncoder stacks multiple EncoderLayers
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_encoder_layers)
+
+
+    def forward(self, turn_embeddings: torch.Tensor):
+        # Input `turn_embeddings` is expected to be (Batch_Size, Num_Turns, Embedding_Dim) which is (B, S, E)
+
+        # Generate causal mask: ensures each position only attends to previous positions
+        seq_len = turn_embeddings.shape[1] # Sequence length is the second dimension for batch_first=True
+        src_mask = nn.Transformer.generate_square_subsequent_mask(seq_len).to(turn_embeddings.device)
+
+        # Pass through the Transformer Encoder with the mask
+        output = self.transformer_encoder(turn_embeddings, mask=src_mask)
+
+        # Output is already (Batch_Size, Num_Turns, Embedding_Dim) because batch_first=True
+        return output
+
+
+class CrossModalFusionAttention(nn.Module):
+    """
+    CFA module from sec 2.4 of the paper. Each modality's Q attends to the
+    other's K/V, and the resulting delta is layer-normed back into the original.
+
+    Equations 12-15:
+        delta_a->t = softmax(Q_t K_a^T / sqrt(d)) V_a
+        delta_t->a = softmax(Q_a K_t^T / sqrt(d)) V_t
+        Z_a = LN(Z_a + delta_t->a)
+        Z_t = LN(Z_t + delta_a->t)
+    """
+
+    def __init__(self, d_model: int, nhead: int, dropout: float = 0.1):
+        super().__init__()
+
+        self.d_model = d_model
+        self.nhead   = nhead
+        self.d_head  = d_model // nhead
+
+        # separate projections for each modality so each gets its own Q/K/V
+        self.q_audio = nn.Linear(d_model, d_model)
+        self.k_audio = nn.Linear(d_model, d_model)
+        self.v_audio = nn.Linear(d_model, d_model)
+
+        self.q_text  = nn.Linear(d_model, d_model)
+        self.k_text  = nn.Linear(d_model, d_model)
+        self.v_text  = nn.Linear(d_model, d_model)
+
+        self.norm_audio = nn.LayerNorm(d_model)
+        self.norm_text  = nn.LayerNorm(d_model)
+
+        self.dropout = nn.Dropout(dropout)
+
+    def _split_heads(self, x: torch.Tensor) -> torch.Tensor:
+        # (B, T, d_model) -> (B * nhead, T, d_head) for batched matmul
+        B, T, _ = x.shape
+        x = x.view(B, T, self.nhead, self.d_head)
+        x = x.permute(0, 2, 1, 3)              # (B, nhead, T, d_head)
+        return x.reshape(B * self.nhead, T, self.d_head)
+
+    def _merge_heads(self, x: torch.Tensor, B: int, T: int) -> torch.Tensor:
+        # inverse of _split_heads
+        x = x.view(B, self.nhead, T, self.d_head)
+        x = x.permute(0, 2, 1, 3).contiguous()
+        return x.view(B, T, self.d_model)
+
+    def _attend(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+        # scaled dot-product; q/k/v are already split into heads
+        scale  = self.d_head ** -0.5
+        scores = torch.bmm(q, k.transpose(1, 2)) * scale
+        weights = self.dropout(F.softmax(scores, dim=-1))
+        return torch.bmm(weights, v)
+
+    def forward(
+        self,
+        z_audio: torch.Tensor,   # (B, T, d_model) -- output of intra-modal audio encoder
+        z_text:  torch.Tensor,   # (B, T, d_model) -- output of intra-modal text encoder
+    ):
+        B, T, _ = z_audio.shape
+
+        # project each modality independently
+        q_a = self._split_heads(self.q_audio(z_audio))
+        k_a = self._split_heads(self.k_audio(z_audio))
+        v_a = self._split_heads(self.v_audio(z_audio))
+
+        q_t = self._split_heads(self.q_text(z_text))
+        k_t = self._split_heads(self.k_text(z_text))
+        v_t = self._split_heads(self.v_text(z_text))
+
+        # text queries into audio keys/values -> what audio says about text context
+        delta_a2t = self._merge_heads(self._attend(q_t, k_a, v_a), B, T)
+        # audio queries into text keys/values -> what text says about audio context
+        delta_t2a = self._merge_heads(self._attend(q_a, k_t, v_t), B, T)
+
+        # residual add + norm (eqs 14-15)
+        z_audio_fused = self.norm_audio(z_audio + delta_t2a)
+        z_text_fused  = self.norm_text(z_text  + delta_a2t)
+
+        return z_audio_fused, z_text_fused  # both (B, T, d_model)
+
+
+class SCFA(nn.Module):
+    """
+    Speaker-aware Cross-modal Fusion Architecture
+    
+    Design credit to Zhao et al. 2023.
+
+    Pipeline (matching fig 1 + sec 2):
+        1. DualModalityEmbedder  -- utterance-level audio + text features
+        2. ContextAwareTransformer (x2) -- global context for each modality
+        3. SpeakerAwareTransformer (x2) -- intra/inter speaker attention per modality
+        4. Intra-modal attention gate -- fuse context and speaker-aware streams
+        5. CrossModalFusionAttention -- cross-modal interaction
+        6. Classifier -- emotion prediction over concatenated features
+    """
+
+    def __init__(
+        self,
+        embedder:       DualModalityEmbedder,
+        d_model:        int,
+        nhead:          int,
+        num_ctx_layers: int,
+        num_spk_layers: int,
+        dim_feedforward: int,
+        num_classes:    int,
+        dropout:        float = 0.1,
+    ):
+        super().__init__()
+
+        self.embedder = embedder
+
+        # context transformers -- one per modality (sec 2.3, eqs 5-6)
+        self.ctx_audio = ContextAwareTransformer(d_model, nhead, num_ctx_layers, dim_feedforward, dropout)
+        self.ctx_text  = ContextAwareTransformer(d_model, nhead, num_ctx_layers, dim_feedforward, dropout)
+
+        # speaker-aware transformers -- one per modality (sec 2.3, eqs 7-11)
+        self.spk_audio = SpeakerAwareTransformer(d_model, nhead, num_spk_layers, dim_feedforward, dropout)
+        self.spk_text  = SpeakerAwareTransformer(d_model, nhead, num_spk_layers, dim_feedforward, dropout)
+
+        # learned scalar gate to blend context + speaker streams before CFA
+        # keeping it simple: a single linear over the concatenation
+        self.intra_gate_audio = nn.Linear(d_model * 2, d_model)
+        self.intra_gate_text  = nn.Linear(d_model * 2, d_model)
+
+        # cross-modal fusion (sec 2.4, eqs 12-15)
+        self.cfa = CrossModalFusionAttention(d_model, nhead, dropout)
+
+
+    def _intra_modal_encode(
+        self,
+        emb:            torch.Tensor,        # (B, T, d)
+        ctx_transformer: ContextAwareTransformer,
+        spk_transformer: SpeakerAwareTransformer,
+        gate:            nn.Linear,
+        speaker_ids:     List[List[str]],
+    ) -> torch.Tensor:
+        # context stream -- attends over the full conversation without speaker bias
+        z_ctx = ctx_transformer(emb)
+
+        # speaker stream -- intra + inter attention, then sum (paper concatenates heads)
+        z_intra, z_inter = spk_transformer(emb, speaker_ids)
+        z_spk = z_intra + z_inter   # both carry complementary speaker-level info
+
+        # gate blends the two streams; tanh keeps the scale bounded
+        z_fused = torch.tanh(gate(torch.cat([z_ctx, z_spk], dim=-1)))
+        return z_fused
+
+    def forward(
+        self,
+        audio:       torch.Tensor,       # (B, T, samples)
+        lengths:     torch.Tensor,       # (B, T)
+        texts:       List[List[str]],    # [B][T]
+        speaker_ids: List[List[str]],    # [B][T]
+        text_only:   Optional[torch.Tensor] = None,  # (B, T) bool
+    ):
+        # 1 utterance encoding
+        text_emb, audio_emb = self.embedder(audio, lengths, texts, text_only)
+        # both (B, T, d_model)
+
+        # 2, 3 intra-modal conversation encoding 
+        z_audio = self._intra_modal_encode(
+            audio_emb, self.ctx_audio, self.spk_audio, self.intra_gate_audio, speaker_ids
+        )
+        z_text = self._intra_modal_encode(
+            text_emb, self.ctx_text, self.spk_text, self.intra_gate_text, speaker_ids
+        )
+        # both (B, T, d_model)
+
+        # 4 cross-modal fusion 
+        z_audio_fused, z_text_fused = self.cfa(z_audio, z_text)
+        # both (B, T, d_model)
+
+        # Concatenate all 4 streams
+        return torch.cat([z_audio, z_text, z_audio_fused, z_text_fused], dim=-1)
+        
