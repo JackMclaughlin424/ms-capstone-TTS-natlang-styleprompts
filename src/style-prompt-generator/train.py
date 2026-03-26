@@ -76,19 +76,19 @@ DEFAULTS: Dict[str, Any] = {
     "num_mapping_layers":    8,
     "mapping_nhead":         8,
     "max_new_tokens":        80,
-    "system_prompt":         None,        # None | "Speaking style:" | custom string
+    "system_prompt":         "",        # "" | "Speaking style:" | custom string
 
     # freezing
     "num_unfrozen_bert":     0,           # how many BERT encoder layers to unfreeze (from top)
     "num_unfrozen_wavlm":    0,           # how many WavLM encoder layers to unfreeze (from top)
 
     # pooling
-    "dialogue_pooler":       "attentive", # "attentive" | "last"
+    "dialogue_pooler":       "last", # "attentive" | "last"
 
     # training
     "batch_size":            8,
     "num_epochs":            20,
-    "learning_rate":         3e-4,
+    "learning_rate":         5e-4,
     "weight_decay":          1e-2,
     "grad_clip":             1.0,         # max gradient norm; None to disable
     "warmup_ratio":          0.1,         # fraction of total steps used for LR warmup
@@ -118,8 +118,8 @@ VALID = {
     "d_model":          {192, 384, 768},
     "dialogue_pooler":  {"attentive", "last"},
     "lr_schedule":      {"cosine", "linear", "constant"},
-    "num_turns":        set(range(0, 7)),   # 0-6 inclusive
-    "num_prefix_tokens": {1, 10, 20, 40},
+    "num_turns":        set(range(0, 6)),   # 0-5 inclusive
+    "num_prefix_tokens": {10, 20, 40},
     "batch_size":       {4, 8, 16, 32},
 }
 
