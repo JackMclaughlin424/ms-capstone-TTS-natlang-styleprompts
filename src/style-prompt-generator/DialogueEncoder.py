@@ -396,7 +396,6 @@ class SCFA(nn.Module):
         3. SpeakerAwareTransformer (x2) -- intra/inter speaker attention per modality
         4. Intra-modal attention gate -- fuse context and speaker-aware streams
         5. CrossModalFusionAttention -- cross-modal interaction
-        6. Classifier -- emotion prediction over concatenated features
     """
 
     def __init__(
