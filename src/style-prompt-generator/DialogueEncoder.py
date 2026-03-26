@@ -260,17 +260,10 @@ class SpeakerAwareTransformer(nn.Module):
         )
 
     def forward(self, turn_embeddings: torch.Tensor, speaker_ids_list: List[List[str]]):
-        # Pass through the intra-speaker context aware transformer
-        intra_emb = self.intra_transformer(
-            turn_embeddings,
-            speaker_ids_list=speaker_ids_list
-        )
-
-        # Pass through the inter-speaker context aware transformer
-        inter_emb = self.inter_transformer(
-            turn_embeddings,
-            speaker_ids_list=speaker_ids_list
-        )
+        intra_emb = self.intra_transformer(turn_embeddings, speaker_ids_list=speaker_ids_list)
+        inter_emb = self.inter_transformer(turn_embeddings, speaker_ids_list=speaker_ids_list)
+        # keep separate so the caller can concat all three streams (ctx, intra, inter)
+        # as independent head groups before the shared FFN (eqs 9-11)
         return intra_emb, inter_emb
     
 
@@ -384,6 +377,25 @@ class CrossModalFusionAttention(nn.Module):
         return z_audio_fused, z_text_fused  # both (B, T, d_model)
 
 
+class _IntraModalFFN(nn.Module):
+    # eqs 9-11: the three d_sub streams are already concatenated to d_model
+    # before arriving here, so no projection needed -- just residual + FFN + LN
+    def __init__(self, d_model: int, dim_feedforward: int, dropout: float = 0.1):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(d_model)
+        self.ff1   = nn.Linear(d_model, dim_feedforward)
+        self.ff2   = nn.Linear(dim_feedforward, d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.drop  = nn.Dropout(dropout)
+ 
+    def forward(self, z_cat: torch.Tensor, h: torch.Tensor) -> torch.Tensor:
+        # eq 9: residual with H* (original utterance embedding), then LN
+        z = self.norm1(z_cat + h)
+        # eqs 10-11: FFN + residual LN
+        o = self.ff2(self.drop(F.relu(self.ff1(z))))
+        return self.norm2(o + z)
+    
+
 class SCFA(nn.Module):
     """
     Speaker-aware Cross-modal Fusion Architecture
@@ -394,61 +406,65 @@ class SCFA(nn.Module):
         1. DualModalityEmbedder  -- utterance-level audio + text features
         2. ContextAwareTransformer (x2) -- global context for each modality
         3. SpeakerAwareTransformer (x2) -- intra/inter speaker attention per modality
-        4. Intra-modal attention gate -- fuse context and speaker-aware streams
-        5. CrossModalFusionAttention -- cross-modal interaction
+        4. Intra-modal combination layer -- fuse context and speaker-aware streams -> 2 intra-modal vectors
+        5. CrossModalFusionAttention -- cross-modal interaction -> 2 inter-modal vectors
+        6. Concatenate all vectors from steps 4,5
     """
 
     def __init__(
         self,
         embedder:       DualModalityEmbedder,
         d_model:        int,
-        nhead:          int,
         num_ctx_layers: int,
         num_spk_layers: int,
         dim_feedforward: int,
-        num_classes:    int,
+        nhead:          int=1,
         dropout:        float = 0.1,
     ):
         super().__init__()
-
+ 
         self.embedder = embedder
-
+ 
+        # each stream gets d_model//3 width so their concat lands back at d_model,
+        # mirroring how MHA splits into heads then concatenates (sec 2.3)
+        if d_model % 3 != 0:
+            raise ValueError(f"d_model must be divisible by 3 (got {d_model})")
+        d_sub  = d_model // 3
+        n_sub  = max(1, nhead // 3)  # at least 1 head per sub-transformer
+ 
         # context transformers -- one per modality (sec 2.3, eqs 5-6)
-        self.ctx_audio = ContextAwareTransformer(d_model, nhead, num_ctx_layers, dim_feedforward, dropout)
-        self.ctx_text  = ContextAwareTransformer(d_model, nhead, num_ctx_layers, dim_feedforward, dropout)
-
+        self.ctx_audio = ContextAwareTransformer(d_sub, n_sub, num_ctx_layers, dim_feedforward, dropout)
+        self.ctx_text  = ContextAwareTransformer(d_sub, n_sub, num_ctx_layers, dim_feedforward, dropout)
+ 
         # speaker-aware transformers -- one per modality (sec 2.3, eqs 7-11)
-        self.spk_audio = SpeakerAwareTransformer(d_model, nhead, num_spk_layers, dim_feedforward, dropout)
-        self.spk_text  = SpeakerAwareTransformer(d_model, nhead, num_spk_layers, dim_feedforward, dropout)
-
-        # learned scalar gate to blend context + speaker streams before CFA
-        # keeping it simple: a single linear over the concatenation
-        self.intra_gate_audio = nn.Linear(d_model * 2, d_model)
-        self.intra_gate_text  = nn.Linear(d_model * 2, d_model)
-
+        self.spk_audio = SpeakerAwareTransformer(d_sub, n_sub, num_spk_layers, dim_feedforward, dropout)
+        self.spk_text  = SpeakerAwareTransformer(d_sub, n_sub, num_spk_layers, dim_feedforward, dropout)
+ 
+        # FFN + LN to fuse the three d_sub streams after concat (eqs 9-11)
+        # concat of [ctx, intra, inter] = (B, T, 3*d_sub) = (B, T, d_model), no proj needed
+        self.ffn_audio = _IntraModalFFN(d_model, dim_feedforward, dropout)
+        self.ffn_text  = _IntraModalFFN(d_model, dim_feedforward, dropout)
+ 
         # cross-modal fusion (sec 2.4, eqs 12-15)
         self.cfa = CrossModalFusionAttention(d_model, nhead, dropout)
 
 
     def _intra_modal_encode(
         self,
-        emb:            torch.Tensor,        # (B, T, d)
+        emb:             torch.Tensor,
         ctx_transformer: ContextAwareTransformer,
         spk_transformer: SpeakerAwareTransformer,
-        gate:            nn.Linear,
+        ffn:             "_IntraModalFFN",
         speaker_ids:     List[List[str]],
     ) -> torch.Tensor:
-        # context stream -- attends over the full conversation without speaker bias
-        z_ctx = ctx_transformer(emb)
-
-        # speaker stream -- intra + inter attention, then sum (paper concatenates heads)
-        z_intra, z_inter = spk_transformer(emb, speaker_ids)
-        z_spk = z_intra + z_inter   # both carry complementary speaker-level info
-
-        # gate blends the two streams; tanh keeps the scale bounded
-        z_fused = torch.tanh(gate(torch.cat([z_ctx, z_spk], dim=-1)))
-        return z_fused
-
+        z_ctx   = ctx_transformer(emb)               # global context stream (eqs 5-6)
+        z_intra, z_inter = spk_transformer(emb, speaker_ids)  # speaker streams (eqs 7-8)
+ 
+        # concat the three d_sub streams -> (B, T, d_model), no projection needed
+        # this is the "concatenated in series" the paper describes before eqs 9-11
+        z_cat = torch.cat([z_ctx, z_intra, z_inter], dim=-1)
+        return ffn(z_cat, emb)  # eqs 9-11
+ 
     def forward(
         self,
         audio:       torch.Tensor,       # (B, T, samples)
@@ -460,20 +476,35 @@ class SCFA(nn.Module):
         # 1 utterance encoding
         text_emb, audio_emb = self.embedder(audio, lengths, texts, text_only)
         # both (B, T, d_model)
-
+ 
         # 2, 3 intra-modal conversation encoding 
         z_audio = self._intra_modal_encode(
-            audio_emb, self.ctx_audio, self.spk_audio, self.intra_gate_audio, speaker_ids
+            audio_emb, self.ctx_audio, self.spk_audio, self.ffn_audio, speaker_ids
         )
         z_text = self._intra_modal_encode(
-            text_emb, self.ctx_text, self.spk_text, self.intra_gate_text, speaker_ids
+            text_emb, self.ctx_text, self.spk_text, self.ffn_text, speaker_ids
         )
         # both (B, T, d_model)
-
+ 
         # 4 cross-modal fusion 
         z_audio_fused, z_text_fused = self.cfa(z_audio, z_text)
         # both (B, T, d_model)
-
-        # Concatenate all 4 streams
+ 
+        # Concatenate all 4 streams -> (B, T, 4 * d_model)
         return torch.cat([z_audio, z_text, z_audio_fused, z_text_fused], dim=-1)
-        
+
+
+class DialoguePooler(nn.Module):
+    # collapses (B, T, d) -> (B, d) for prefix generation
+    def __init__(self, d_model: int, mode: str = "attentive"):
+        super().__init__()
+        assert mode in ("attentive", "last"), f"unknown pooling mode: {mode}"
+        self.mode = mode
+        if mode == "attentive":
+            self.attn_pool = SelfAttentivePooling(d_model)
+
+    def forward(self, scfa_out: torch.Tensor) -> torch.Tensor:
+        # scfa_out: (B, T, 4*d_model)
+        if self.mode == "last":
+            return scfa_out[:, -1, :]  # anchor turn has attended over all prior turns causally
+        return self.attn_pool(scfa_out)  # (B, 4*d_model)
