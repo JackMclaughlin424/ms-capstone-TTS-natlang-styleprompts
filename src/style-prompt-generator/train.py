@@ -52,9 +52,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-# -------------------------------------------------------------------------
-# Config schema + defaults
-# -------------------------------------------------------------------------
+# defaults
 
 DEFAULTS: Dict[str, Any] = {
     # data
@@ -75,8 +73,10 @@ DEFAULTS: Dict[str, Any] = {
     "num_prefix_tokens":     10,          # K in StyleCap notation
     "num_mapping_layers":    8,
     "mapping_nhead":         8,
-    "max_new_tokens":        80,
     "system_prompt":         "",        # "" | "Speaking style:" | custom string
+    "max_prompt_tokens": 128,   # system prompt text -- used at both train and inference
+    "max_style_desc_tokens": 128,  # ground-truth target style descriptions -- training only
+    "max_new_tokens": 80,       # generation budget -- inference only
 
     # freezing
     "num_unfrozen_bert":     0,           # how many BERT encoder layers to unfreeze (from top)
@@ -124,9 +124,7 @@ VALID = {
 }
 
 
-# -------------------------------------------------------------------------
 # Config loading + validation
-# -------------------------------------------------------------------------
 
 def load_config(path: str) -> Dict[str, Any]:
     with open(path) as f:
@@ -161,9 +159,7 @@ def load_config(path: str) -> Dict[str, Any]:
     return cfg
 
 
-# -------------------------------------------------------------------------
 # Reproducibility
-# -------------------------------------------------------------------------
 
 def set_seed(seed: int):
     random.seed(seed)
@@ -172,9 +168,7 @@ def set_seed(seed: int):
     torch.cuda.manual_seed_all(seed)
 
 
-# -------------------------------------------------------------------------
 # Model construction
-# -------------------------------------------------------------------------
 
 def _unfreeze_top_n_layers(model: nn.Module, layer_attr: str, n: int):
     """Freeze everything first, then selectively unfreeze the top n encoder layers."""
@@ -231,10 +225,7 @@ def build_model(cfg: Dict[str, Any], device: torch.device) -> SCFAWithStyleHead:
     text_backbone, tokenizer = build_text_encoder(cfg, device)
     audio_backbone, processor = build_audio_encoder(cfg, device)
 
-    # project backbone dim (768) -> cfg d_model if they differ
-    # the ModalityEncoder pooler sits on top of the backbone hidden states,
-    # so its input dim is always 768 (BERT/WavLM fixed dim)
-    BACKBONE_DIM = 768
+
     embedder = DualModalityEmbedder(
         text_encoder_model_pretrained=text_backbone,
         audio_encoder_model_pretrained=audio_backbone,
@@ -279,15 +270,14 @@ def build_model(cfg: Dict[str, Any], device: torch.device) -> SCFAWithStyleHead:
         llm=llm,
         system_prompt=cfg["system_prompt"],
         max_new_tokens=cfg["max_new_tokens"],
+        max_prompt_tokens=cfg["max_prompt_tokens"],
     ).to(device)
 
     model = SCFAWithStyleHead(scfa=scfa, pooler=pooler, style_generator=generator)
     return model
 
 
-# -------------------------------------------------------------------------
 # Data
-# -------------------------------------------------------------------------
 
 def build_dataloaders(cfg: Dict[str, Any]):
     # num_turns == 0 means script-only (text only), represented as 1 turn with no audio
@@ -296,7 +286,7 @@ def build_dataloaders(cfg: Dict[str, Any]):
     dataset = ConvoStyleDataset(
         h5_path=cfg["h5_path"],
         meta_path=cfg["meta_path"],
-        meta_columns=["transcription", "style_prompt"],  # style_prompt is the training target
+        meta_columns=["transcription", "text_description"],  # text_description is the training target
         sample_rate=cfg["sample_rate"],
         num_turns=effective_turns,
         max_len_sec=cfg["max_len_sec"],
@@ -316,9 +306,11 @@ def build_dataloaders(cfg: Dict[str, Any]):
         pin_memory=True,
     )
 
+    # Don't shuffle, rely on seed randomness to ensure reproducible experiments
     train_loader = DataLoader(
-        train_ds, batch_size=cfg["batch_size"], shuffle=True, **loader_kwargs
+        train_ds, batch_size=cfg["batch_size"], shuffle=False, **loader_kwargs
     )
+
     val_loader = DataLoader(
         val_ds, batch_size=cfg["batch_size"], shuffle=False, **loader_kwargs
     )
@@ -327,9 +319,8 @@ def build_dataloaders(cfg: Dict[str, Any]):
     return train_loader, val_loader, dataset
 
 
-# -------------------------------------------------------------------------
+
 # Optimizer + scheduler
-# -------------------------------------------------------------------------
 
 def build_optimizer_and_scheduler(model: SCFAWithStyleHead, cfg: Dict[str, Any], total_steps: int):
     # only optimize parameters that require gradients
@@ -355,9 +346,7 @@ def build_optimizer_and_scheduler(model: SCFAWithStyleHead, cfg: Dict[str, Any],
     return optimizer, scheduler
 
 
-# -------------------------------------------------------------------------
 # Loss
-# -------------------------------------------------------------------------
 
 def compute_loss(
     model: SCFAWithStyleHead,
@@ -369,14 +358,14 @@ def compute_loss(
     Teacher-forced cross-entropy over the style prompt tokens.
 
     The LLM is frozen, so we only flow gradients through the mapping network
-    (StylePromptHead) and optionally the unfrozen backbone layers.
+    (StylePromptHead), SCFA model, and optionally the unfrozen layers of BERT and WavLM.
     """
     audio      = batch["audio"].to(device)        # (B, T, samples)
     lengths    = batch["lengths"].to(device)      # (B, T)
     text_only  = batch["text_only"].to(device)    # (B, T)
     texts      = batch["transcription"]           # list[B][T]
     speaker_ids = batch["speaker_id"]             # list[B][T]
-    targets    = batch["style_prompt"]            # list[B][T] -- we want the anchor turn's prompt
+    targets    = batch["text_description"]            # list[B][T] -- we want the anchor turn's prompt
 
     # anchor is always the last turn
     anchor_prompts = [chain[-1] for chain in targets]  # list[B]
@@ -386,15 +375,22 @@ def compute_loss(
         audio = torch.zeros_like(audio)
         text_only = torch.ones_like(text_only)
 
-    # get prefix embeddings from the style head
+
+    #
+    #   RUNNING MODEL
+    #
+
+    # Encode turns with context + speaker information
     dialogue_ctx = model.scfa(audio, lengths, texts, speaker_ids, text_only)
+    # pool embeddings
     dialogue_vec = model.pooler(dialogue_ctx)
+    # get prefix embeddings from the style head
     prefix_embeds = model.style_generator.style_head(dialogue_vec)  # (B, K, TINYLLAMA_DIM)
 
     B = prefix_embeds.shape[0]
     K = prefix_embeds.shape[1]
 
-    # tokenize the target captions
+    # tokenize the target style descriptions
     tokenizer = model.style_generator.tokenizer
     llm       = model.style_generator.llm
 
@@ -403,7 +399,7 @@ def compute_loss(
         return_tensors="pt",
         padding=True,
         truncation=True,
-        max_length=128,
+        max_length=cfg["max_style_desc_tokens"],
     )
     input_ids = target_tokens.input_ids.to(device)   # (B, L)
     attn_mask = target_tokens.attention_mask.to(device)
@@ -411,17 +407,16 @@ def compute_loss(
     # embed target tokens for teacher forcing
     token_embeds = llm.get_input_embeddings()(input_ids)  # (B, L, TINYLLAMA_DIM)
 
-    # optionally prepend system prompt
-    if model.style_generator.system_prompt is not None:
+    # optionally prepend system prompt, skip if empty string
+    if model.style_generator.system_prompt:
         prompt_tokens = tokenizer(
             [model.style_generator.system_prompt] * B,
             return_tensors="pt",
             padding=True,
             truncation=True,
-            max_length=64,
+            max_length=cfg["max_style_desc_tokens"],
         )
         prompt_embeds = llm.get_input_embeddings()(prompt_tokens.input_ids.to(device))
-        prompt_mask   = prompt_tokens.attention_mask.to(device)
 
         input_embeds = torch.cat([prefix_embeds, prompt_embeds, token_embeds], dim=1)
         prefix_mask  = torch.ones(B, K + prompt_embeds.shape[1], dtype=torch.long, device=device)
@@ -445,9 +440,8 @@ def compute_loss(
     return outputs.loss
 
 
-# -------------------------------------------------------------------------
+
 # Checkpoint helpers
-# -------------------------------------------------------------------------
 
 def save_checkpoint(model, optimizer, scheduler, epoch, step, loss, cfg, out_dir: Path):
     ckpt = {
@@ -483,9 +477,7 @@ def load_checkpoint(path: str, model, optimizer=None, scheduler=None):
     return ckpt["epoch"], ckpt["step"]
 
 
-# -------------------------------------------------------------------------
 # Training loop
-# -------------------------------------------------------------------------
 
 def run_epoch(
     model, loader, optimizer, scheduler, scaler,

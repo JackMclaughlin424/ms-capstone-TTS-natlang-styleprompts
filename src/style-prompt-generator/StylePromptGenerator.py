@@ -97,6 +97,7 @@ class StylePromptGenerator(nn.Module):
         style_head:     StylePromptHead,
         tokenizer:      AutoTokenizer,
         llm:            AutoModelForCausalLM,
+        max_prompt_tokens: int,
         system_prompt:  Optional[str] = None,
         max_new_tokens: int = 80,
     ):
@@ -106,13 +107,14 @@ class StylePromptGenerator(nn.Module):
         self.llm            = llm
         self.system_prompt  = system_prompt
         self.max_new_tokens = max_new_tokens
+        self.max_prompt_tokens = max_prompt_tokens
 
         for p in self.llm.parameters():
             p.requires_grad = False
 
     def _embed_text(self, texts: List[str], device) -> tuple:
         tokens = self.tokenizer(
-            texts, return_tensors="pt", padding=True, truncation=True, max_length=256
+            texts, return_tensors="pt", padding=True, truncation=True, max_length=self.max_prompt_tokens
         )
         input_ids = tokens.input_ids.to(device)
         attn_mask = tokens.attention_mask.to(device)
