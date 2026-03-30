@@ -15,7 +15,7 @@
     "num_ctx_layers": 2,
     "num_spk_layers": 2,
     "dim_feedforward": 2048,
-    "nhead": 12,
+    "nhead": 8,
     "dialogue_pooler": "last",
     "_comment_param_section_llm_peft": "the following parameters pertain to the peft of the llm",
     "num_prefix_tokens": 40,
