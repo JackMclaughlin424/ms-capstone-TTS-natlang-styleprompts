@@ -1,7 +1,7 @@
 {
     "_comment": "All fields are optional except h5_path and meta_path. Omitted fields fall back to defaults in train.py.",
-    "run_name": "baseline",
-    "output_dir": "runs/baseline",
+    "run_name": "poc",
+    "output_dir": "runs/poc",
     "h5_path": "/content/drive/MyDrive/capstone/Colab resources/data/merged_audio_500.h5",
     "meta_path": "/content/drive/MyDrive/capstone/Colab resources/data/merged_metadata_500.parquet",
     "_comment_param_section_dataset": "the Following parameters pertain to the dataset",
