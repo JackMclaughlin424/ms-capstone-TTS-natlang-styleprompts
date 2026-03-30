@@ -89,6 +89,12 @@ class DualModalityEmbedder(nn.Module):
         flat_texts = [texts[b][t] for b in range(B) for t in range(T)]
 
         tokens = encode_text_inputs(flat_texts, self.tokenizer)
+
+        # grab device from the model weights, not from input (there is no tensor input here)
+        device = next(self.text_encoder.parameters()).device
+        tokens = {k: v.to(device) for k, v in tokens.items()}  # tokenizer always returns CPU tensors
+    
+
         with torch.no_grad():
             hidden = self.text_encoder.backbone(**tokens).last_hidden_state
         flat_emb = self.text_encoder(hidden, tokens["attention_mask"])  # (B*T, d)
@@ -113,6 +119,10 @@ class DualModalityEmbedder(nn.Module):
             lengths_t = lengths[:, t]     # (B,)
 
             inputs, lengths_t = encode_audio_inputs(audio_t, lengths_t, self.processor, self.SAMPLE_RATE)
+
+            # processor outputs land on CPU same as tokenizer
+            inputs = {k: v.to(device) for k, v in inputs.items()}  
+
             with torch.no_grad():
                 hidden = self.audio_encoder.backbone(**inputs).last_hidden_state
 
