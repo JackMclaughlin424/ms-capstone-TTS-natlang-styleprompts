@@ -651,7 +651,7 @@ def wandb_init(cfg: Dict[str, Any]):
     try:
         import wandb
     except ImportError:
-        log.warning("wandb not installed -- skipping W&B tracking. pip install wandb to enable.")
+        log.warning("wandb not installed -- skipping W&B tracking.")
         return None
 
     api_key = os.environ.get("WANDB_API_KEY")
@@ -659,8 +659,8 @@ def wandb_init(cfg: Dict[str, Any]):
         log.warning("WANDB_API_KEY not set -- skipping W&B tracking.")
         return None
 
-    # never prompt for login on a headless node
-    os.environ.setdefault("WANDB_MODE", "online")
+    # explicitly authenticate so wandb never falls through to the interactive prompt
+    wandb.login(key=api_key, relogin=False)
 
     try:
         run = wandb.init(
@@ -669,15 +669,10 @@ def wandb_init(cfg: Dict[str, Any]):
             name=cfg.get("run_name"),
             config=cfg,
             resume="allow",
-            settings=wandb.Settings(
-                _disable_stats=False,
-                silent=False,
-            ),
         )
         log.info(f"W&B run: {run.url}")
         return run
     except Exception as e:
-        # don't let a W&B failure kill the whole training job
         log.warning(f"W&B init failed ({e}) -- continuing without tracking.")
         return None
  
