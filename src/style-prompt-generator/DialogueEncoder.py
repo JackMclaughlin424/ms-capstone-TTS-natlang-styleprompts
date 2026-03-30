@@ -476,10 +476,8 @@ class SCFA(nn.Module):
     ) -> torch.Tensor:
         
 
-        emb_with_pos = self.turn_pos_enc(emb)  # inject position before any transformer
-        
-        z_ctx   = ctx_transformer(emb_with_pos)               # global context stream (eqs 5-6)
-        z_intra, z_inter = spk_transformer(emb_with_pos, speaker_ids)  # speaker streams (eqs 7-8)
+        z_ctx   = ctx_transformer(emb)               # global context stream (eqs 5-6)
+        z_intra, z_inter = spk_transformer(emb, speaker_ids)  # speaker streams (eqs 7-8)
  
         # concat the three d_sub streams -> (B, T, d_model), no projection needed
         # this is the "concatenated in series" the paper describes before eqs 9-11
@@ -497,6 +495,12 @@ class SCFA(nn.Module):
         # 1 utterance encoding
         text_emb, audio_emb = self.embedder(audio, lengths, texts, text_only)
         # both (B, T, d_model)
+
+        # 1.5 positional encoding
+        # apply shared positional encoding before the modality-specific transformers
+        # so both streams are grounded in the same turn positions going into CFA
+        audio_emb = self.turn_pos_enc(audio_emb)
+        text_emb  = self.turn_pos_enc(text_emb)
  
         # 2, 3 intra-modal conversation encoding 
         z_audio = self._intra_modal_encode(
