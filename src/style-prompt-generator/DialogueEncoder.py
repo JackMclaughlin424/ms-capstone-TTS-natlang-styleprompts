@@ -457,7 +457,7 @@ class SCFA(nn.Module):
         d_sub  = d_model // 3
         n_sub  = max(1, nhead // 3)  # at least 1 head per sub-transformer
 
-        self.turn_pos_enc = TurnPositionEncoding(d_sub, max_turns)
+        self.turn_pos_enc = TurnPositionEncoding(d_model, max_turns)
  
         # context transformers -- one per modality (sec 2.3, eqs 5-6)
         self.ctx_audio = ContextAwareTransformer(d_sub, n_sub, num_ctx_layers, dim_feedforward, dropout)
