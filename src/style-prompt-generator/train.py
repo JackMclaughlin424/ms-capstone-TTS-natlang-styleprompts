@@ -645,25 +645,41 @@ def train(cfg: Dict[str, Any]):
 # W&B helpers
  
 def wandb_init(cfg: Dict[str, Any]):
-    """Initialize a W&B run. Returns the run object, or None if W&B is disabled."""
     if not cfg.get("use_wandb", True):
         return None
- 
+
     try:
         import wandb
     except ImportError:
         log.warning("wandb not installed -- skipping W&B tracking. pip install wandb to enable.")
         return None
- 
-    run = wandb.init(
-        project=cfg["wandb_project"],
-        entity=cfg.get("wandb_entity"),
-        name=cfg.get("run_name"),
-        config=cfg,         # logs the full config as hyperparameters
-        resume="allow",     # picks up a previous run if the run_name matches
-    )
-    log.info(f"W&B run: {run.url}")
-    return run
+
+    api_key = os.environ.get("WANDB_API_KEY")
+    if not api_key:
+        log.warning("WANDB_API_KEY not set -- skipping W&B tracking.")
+        return None
+
+    # never prompt for login on a headless node
+    os.environ.setdefault("WANDB_MODE", "online")
+
+    try:
+        run = wandb.init(
+            project=cfg["wandb_project"],
+            entity=cfg.get("wandb_entity"),
+            name=cfg.get("run_name"),
+            config=cfg,
+            resume="allow",
+            settings=wandb.Settings(
+                _disable_stats=False,
+                silent=False,
+            ),
+        )
+        log.info(f"W&B run: {run.url}")
+        return run
+    except Exception as e:
+        # don't let a W&B failure kill the whole training job
+        log.warning(f"W&B init failed ({e}) -- continuing without tracking.")
+        return None
  
  
 def wandb_log(metrics: dict, step: int, run):
