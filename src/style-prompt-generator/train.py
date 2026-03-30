@@ -110,6 +110,11 @@ DEFAULTS: Dict[str, Any] = {
     # logging
     "log_every_n_steps":     50,
     "run_name":              None,        # optional label shown in log lines
+
+    # wandb -- all optional; set use_wandb=false to disable entirely
+    "use_wandb":             True,
+    "wandb_project":         "style-prompt-gen",
+    "wandb_entity":          "jdm8943-rochester-institute-of-technology",        # your W&B username or team; None uses default
 }
 
 REQUIRED = {"h5_path", "meta_path"}
@@ -479,22 +484,31 @@ def load_checkpoint(path: str, model, optimizer=None, scheduler=None):
 
 # Training loop
 
+def _grad_norm(model: nn.Module) -> float:
+    """Compute global L2 norm of all gradients. Useful for diagnosing training stability."""
+    total = 0.0
+    for p in model.parameters():
+        if p.grad is not None:
+            total += p.grad.detach().norm(2).item() ** 2
+    return total ** 0.5
+
+
 def run_epoch(
     model, loader, optimizer, scheduler, scaler,
-    device, cfg, epoch, global_step, is_train=True,
+    device, cfg, epoch, global_step, wandb_run, is_train=True,
 ) -> tuple[float, int]:
     model.train(is_train)
     total_loss = 0.0
     n_batches  = 0
     tag = "TRAIN" if is_train else "VAL"
-
+ 
     ctx = torch.enable_grad if is_train else torch.no_grad
-
+ 
     with ctx():
         for batch in loader:
             with torch.autocast(device_type=device.type, enabled=cfg["fp16"]):
                 loss = compute_loss(model, batch, device, cfg)
-
+ 
             if is_train:
                 optimizer.zero_grad()
                 if scaler is not None:
@@ -515,21 +529,28 @@ def run_epoch(
                             cfg["grad_clip"],
                         )
                     optimizer.step()
-
+ 
                 scheduler.step()
                 global_step += 1
-
+ 
                 if global_step % cfg["log_every_n_steps"] == 0:
                     lr = scheduler.get_last_lr()[0]
+                    grad_norm = _grad_norm(model)
                     run = f"[{cfg['run_name']}] " if cfg["run_name"] else ""
                     log.info(
                         f"{run}epoch {epoch}  step {global_step}  "
-                        f"loss {loss.item():.4f}  lr {lr:.2e}"
+                        f"loss {loss.item():.4f}  lr {lr:.2e}  grad_norm {grad_norm:.3f}"
                     )
-
+                    # step-level metrics -- logged at every log_every_n_steps
+                    wandb_log({
+                        "train/loss":      loss.item(),
+                        "train/lr":        lr,
+                        "train/grad_norm": grad_norm,
+                    }, step=global_step, run=wandb_run)
+ 
             total_loss += loss.item()
             n_batches  += 1
-
+ 
     avg = total_loss / max(n_batches, 1)
     log.info(f"{tag} epoch {epoch} avg loss: {avg:.4f}")
     return avg, global_step
@@ -537,29 +558,37 @@ def run_epoch(
 
 def train(cfg: Dict[str, Any]):
     set_seed(cfg["seed"])
-
+ 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     log.info(f"Device: {device}")
-
+ 
     out_dir = Path(cfg["output_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
-
+ 
     # save the resolved config for reproducibility
     with open(out_dir / "config.json", "w") as f:
         json.dump(cfg, f, indent=2)
-
+ 
+    wandb_run = wandb_init(cfg)
+ 
     train_loader, val_loader, dataset = build_dataloaders(cfg)
     model = build_model(cfg, device)
-
+ 
     total_steps = len(train_loader) * cfg["num_epochs"]
     optimizer, scheduler = build_optimizer_and_scheduler(model, cfg, total_steps)
-
+ 
+    # W&B can watch gradients and parameter histograms if you want them
+    # log_freq controls how often histograms are computed -- expensive so keep it low
+    if wandb_run is not None:
+        import wandb
+        wandb_run.watch(model, log="gradients", log_freq=cfg["log_every_n_steps"] * 5)
+ 
     # mixed-precision scaler; only active when fp16=True
-    scaler = torch.cuda.amp.GradScaler() if cfg["fp16"] and device.type == "cuda" else None
-
+    scaler = torch.amp.GradScaler(device=device) if cfg["fp16"] and device.type == "cuda" else None
+ 
     start_epoch = 0
     global_step = 0
-
+ 
     # resume if a checkpoint exists in the output dir
     existing = sorted(out_dir.glob("ckpt_epoch*.pt"))
     if existing:
@@ -567,29 +596,88 @@ def train(cfg: Dict[str, Any]):
             str(existing[-1]), model, optimizer, scheduler
         )
         start_epoch += 1  # resume from the next epoch
-
+ 
+    best_val_loss = float("inf")
+ 
     for epoch in range(start_epoch, cfg["num_epochs"]):
-        _, global_step = run_epoch(
+        train_loss, global_step = run_epoch(
             model, train_loader, optimizer, scheduler, scaler,
-            device, cfg, epoch, global_step, is_train=True,
+            device, cfg, epoch, global_step, wandb_run, is_train=True,
         )
-
+ 
+        # epoch-level train loss (separate key from step-level so the chart is clean)
+        wandb_log({"epoch/train_loss": train_loss, "epoch": epoch}, step=global_step, run=wandb_run)
+ 
         if (epoch + 1) % cfg["eval_every_n_epochs"] == 0:
-            run_epoch(
+            val_loss, _ = run_epoch(
                 model, val_loader, optimizer, scheduler, scaler,
-                device, cfg, epoch, global_step, is_train=False,
+                device, cfg, epoch, global_step, wandb_run, is_train=False,
             )
-
+            wandb_log({"epoch/val_loss": val_loss, "epoch": epoch}, step=global_step, run=wandb_run)
+ 
+            # track best val loss so you can spot divergence in the W&B dashboard
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                wandb_log({"epoch/best_val_loss": best_val_loss}, step=global_step, run=wandb_run)
+ 
         if (epoch + 1) % cfg["save_every_n_epochs"] == 0:
-            save_checkpoint(model, optimizer, scheduler, epoch, global_step, 0.0, cfg, out_dir)
+            ckpt_path = save_checkpoint(
+                model, optimizer, scheduler, epoch, global_step, train_loss, cfg, out_dir
+            )
             prune_old_checkpoints(out_dir, cfg["keep_last_n_ckpts"])
-
+ 
+            # log the checkpoint as a W&B artifact so you can restore any saved version
+            if wandb_run is not None:
+                import wandb
+                artifact = wandb.Artifact(
+                    name=f"checkpoint-{wandb_run.id}",
+                    type="model",
+                    metadata={"epoch": epoch, "step": global_step, "val_loss": best_val_loss},
+                )
+                artifact.add_file(str(ckpt_path))
+                wandb_run.log_artifact(artifact)
+ 
     log.info("Training complete.")
+    wandb_finish(wandb_run)
 
 
-# -------------------------------------------------------------------------
+# W&B helpers
+ 
+def wandb_init(cfg: Dict[str, Any]):
+    """Initialize a W&B run. Returns the run object, or None if W&B is disabled."""
+    if not cfg.get("use_wandb", True):
+        return None
+ 
+    try:
+        import wandb
+    except ImportError:
+        log.warning("wandb not installed -- skipping W&B tracking. pip install wandb to enable.")
+        return None
+ 
+    run = wandb.init(
+        project=cfg["wandb_project"],
+        entity=cfg.get("wandb_entity"),
+        name=cfg.get("run_name"),
+        config=cfg,         # logs the full config as hyperparameters
+        resume="allow",     # picks up a previous run if the run_name matches
+    )
+    log.info(f"W&B run: {run.url}")
+    return run
+ 
+ 
+def wandb_log(metrics: dict, step: int, run):
+    """Log a dict of metrics. No-ops if W&B is disabled."""
+    if run is None:
+        return
+    run.log(metrics, step=step)
+ 
+ 
+def wandb_finish(run):
+    if run is not None:
+        run.finish()
+
+
 # Entry point
-# -------------------------------------------------------------------------
 
 def parse_args():
     p = argparse.ArgumentParser(description="Train SCFAWithStyleHead from a JSON config.")
