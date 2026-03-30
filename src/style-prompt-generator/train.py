@@ -154,7 +154,7 @@ def load_config(path: str) -> Dict[str, Any]:
         raise ValueError(f"d_model must be divisible by 3, got {cfg['d_model']}")
 
     # nhead must divide both d_model and d_model // 3
-    d_sub = cfg["d_model"] // 3
+    d_sub = cfg["d_model"] // 3 # d_sub is dimensionality for the context transformer and 2 speaker transformers
     if cfg["d_model"] % cfg["nhead"] != 0 or d_sub % cfg["nhead"] != 0:
         raise ValueError(
             f"nhead={cfg['nhead']} must divide d_model={cfg['d_model']} "
@@ -240,6 +240,7 @@ def build_model(cfg: Dict[str, Any], device: torch.device) -> SCFAWithStyleHead:
     )
 
     scfa = SCFA(
+        max_turns=cfg["num_turns"],
         embedder=embedder,
         d_model=cfg["d_model"],
         num_ctx_layers=cfg["num_ctx_layers"],

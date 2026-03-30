@@ -51,6 +51,20 @@ def encode_audio_inputs(audio, lengths, processor, sample_rate):
     return inputs, lengths
 
 
+class TurnPositionEncoding(nn.Module):
+    def __init__(self, d_model: int, max_turns: int = 64):
+        super().__init__()
+        # learned is better than sinusoidal here -- turn sequences are short
+        # and the model can learn dialogue-specific positional structure
+        self.embedding = nn.Embedding(max_turns, d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (B, T, d)
+        T = x.shape[1]
+        positions = torch.arange(T, device=x.device)
+        return x + self.embedding(positions)  # broadcasts over B
+
+
 class DualModalityEmbedder(nn.Module):
 
     def __init__(self, text_encoder_model_pretrained, audio_encoder_model_pretrained
@@ -413,6 +427,7 @@ class SCFA(nn.Module):
 
     def __init__(
         self,
+        max_turns:      int,
         embedder:       DualModalityEmbedder,
         d_model:        int,
         num_ctx_layers: int,
@@ -431,6 +446,8 @@ class SCFA(nn.Module):
             raise ValueError(f"d_model must be divisible by 3 (got {d_model})")
         d_sub  = d_model // 3
         n_sub  = max(1, nhead // 3)  # at least 1 head per sub-transformer
+
+        self.turn_pos_enc = TurnPositionEncoding(d_sub, max_turns)
  
         # context transformers -- one per modality (sec 2.3, eqs 5-6)
         self.ctx_audio = ContextAwareTransformer(d_sub, n_sub, num_ctx_layers, dim_feedforward, dropout)
@@ -457,8 +474,12 @@ class SCFA(nn.Module):
         ffn:             "_IntraModalFFN",
         speaker_ids:     List[List[str]],
     ) -> torch.Tensor:
-        z_ctx   = ctx_transformer(emb)               # global context stream (eqs 5-6)
-        z_intra, z_inter = spk_transformer(emb, speaker_ids)  # speaker streams (eqs 7-8)
+        
+
+        emb_with_pos = self.turn_pos_enc(emb)  # inject position before any transformer
+        
+        z_ctx   = ctx_transformer(emb_with_pos)               # global context stream (eqs 5-6)
+        z_intra, z_inter = spk_transformer(emb_with_pos, speaker_ids)  # speaker streams (eqs 7-8)
  
         # concat the three d_sub streams -> (B, T, d_model), no projection needed
         # this is the "concatenated in series" the paper describes before eqs 9-11
