@@ -437,6 +437,9 @@ def compute_loss(
     token_labels  = input_ids.masked_fill(attn_mask == 0, -100)
     labels        = torch.cat([prefix_labels, token_labels], dim=1)
 
+    # cast input embeddings to TinyLlama dtype bf16
+    input_embeds = input_embeds.to(llm.dtype)
+
     outputs = llm(
         inputs_embeds=input_embeds,
         attention_mask=full_mask,

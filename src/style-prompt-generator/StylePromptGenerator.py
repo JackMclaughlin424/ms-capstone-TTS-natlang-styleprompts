@@ -139,6 +139,9 @@ class StylePromptGenerator(nn.Module):
             inputs_embeds  = prefix_embeds
             attention_mask = prefix_mask
 
+        # must cast f32 embeds to bf16 dtype for llm
+        inputs_embeds = inputs_embeds.to(self.llm.dtype)
+
         output_ids = self.llm.generate(
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
