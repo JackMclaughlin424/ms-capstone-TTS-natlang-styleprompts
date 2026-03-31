@@ -70,10 +70,10 @@ DEFAULTS: Dict[str, Any] = {
     "num_ctx_layers":        2,           # ContextAwareTransformer depth
     "num_spk_layers":        2,           # SpeakerAwareTransformer depth
     "dim_feedforward":       2048,
-    "nhead":                 3,           # must divide d_model AND d_model//3
+    "nhead":                 8,           # must divide d_model AND d_model//3
 
     # prefix / LLM
-    "num_prefix_tokens":     10,          # K in StyleCap notation
+    "num_prefix_tokens":     40,          # K in StyleCap notation
     "num_mapping_layers":    8,
     "mapping_nhead":         8,
     "system_prompt":         "",        # "" | "Speaking style:" | custom string
@@ -90,9 +90,9 @@ DEFAULTS: Dict[str, Any] = {
 
     # training
     "batch_size":            8,
-    "num_epochs":            20,
+    "num_epochs":            10,
     "learning_rate":         5e-4,
-    "weight_decay":          1e-2,
+    "weight_decay":          1e-3,
     "grad_clip":             1.0,         # max gradient norm; None to disable
     "warmup_ratio":          0.1,         # fraction of total steps used for LR warmup
     "lr_schedule":           "cosine",    # "cosine" | "linear" | "constant"
@@ -111,7 +111,7 @@ DEFAULTS: Dict[str, Any] = {
     "sample_rate":           16_000,
 
     # logging
-    "log_every_n_steps":     50,
+    "log_every_n_steps":     10,
     "run_name":              None,        # optional label shown in log lines
 
     # wandb -- all optional; set use_wandb=false to disable entirely
