@@ -27,6 +27,10 @@ logging.getLogger().addHandler(logging.NullHandler())
 logging.getLogger().setLevel(logging.INFO)
 log = logging.getLogger(__name__)
 
+# suppress huggingface and other builtin messages
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("transformers").setLevel(logging.WARNING)
+logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 
 
 # Loss
@@ -220,7 +224,7 @@ def run_epoch(
 class TqdmHandler(logging.StreamHandler):
     def emit(self, record):
         tqdm.write(self.format(record))
-        
+
 
 def train(cfg: Dict[str, Any]):
     set_seed(cfg["seed"])
