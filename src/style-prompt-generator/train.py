@@ -616,20 +616,21 @@ def train(cfg: Dict[str, Any]):
         )
  
         # epoch-level train loss (separate key from step-level so the chart is clean)
-        wandb_log({"epoch/train_loss": train_loss, "epoch": epoch}, step=global_step, run=wandb_run)
- 
+        epoch_metrics = {"epoch/train_loss": train_loss, "epoch": epoch}
+
         if (epoch + 1) % cfg["eval_every_n_epochs"] == 0:
             val_loss, _ = run_epoch(
                 model, val_loader, optimizer, scheduler, scaler,
                 device, cfg, epoch, global_step, wandb_run, is_train=False,
             )
-            wandb_log({"epoch/val_loss": val_loss, "epoch": epoch}, step=global_step, run=wandb_run)
- 
-            # track best val loss so you can spot divergence in the W&B dashboard
+            epoch_metrics["epoch/val_loss"] = val_loss
+
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                wandb_log({"epoch/best_val_loss": best_val_loss}, step=global_step, run=wandb_run)
- 
+                epoch_metrics["epoch/best_val_loss"] = best_val_loss
+
+        wandb_log(epoch_metrics, step=global_step, run=wandb_run)
+
         if (epoch + 1) % cfg["save_every_n_epochs"] == 0:
             ckpt_path = save_checkpoint(
                 model, optimizer, scheduler, epoch, global_step, train_loss, cfg, out_dir
