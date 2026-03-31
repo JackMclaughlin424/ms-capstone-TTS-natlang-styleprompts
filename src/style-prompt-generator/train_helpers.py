@@ -9,7 +9,7 @@ import os
 import random
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
@@ -443,7 +443,7 @@ def compute_bertscore(
     device: str = "cpu",
 ) -> Dict[str, float]:
     """Compute BERTScore (P, R, F1) mean and std over a batch of predictions."""
-    from bert_score import score as _bert_score
+    
     P, R, F1 = _bert_score(preds, refs, lang="en", device=device, verbose=False)
     return {
         "bertscore_precision_mean": P.mean().item(),
@@ -460,9 +460,7 @@ def compute_meteor(
     refs: List[str],
 ) -> Dict[str, float]:
     """Compute METEOR mean and std over a batch of predictions."""
-    import nltk
-    from nltk.translate.meteor_score import meteor_score as _meteor
-
+   
     try:
         nltk.data.find("corpora/wordnet")
     except LookupError:
