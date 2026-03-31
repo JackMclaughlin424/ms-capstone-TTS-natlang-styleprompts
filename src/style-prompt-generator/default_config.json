@@ -7,7 +7,7 @@
     "_comment_param_section_dataset": "the Following parameters pertain to the dataset",
     "num_turns": 5,
     "sample_rate": 16000,
-    "max_len_sec": null,
+    "max_len_sec": 15,
     "_comment_param_section_encoder": "the following parameters pertain to the dialouge encoder model",
     "num_unfrozen_bert": 0,
     "num_unfrozen_wavlm": 0,

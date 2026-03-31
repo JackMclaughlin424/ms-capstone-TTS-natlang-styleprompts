@@ -49,7 +49,7 @@ DEFAULTS: Dict[str, Any] = {
     "meta_path":             None,        # required
     "output_dir":            "runs/exp",
     "num_turns":             5,           # 0 means text-only (script-only mode, no audio)
-    "max_len_sec":           None,        # trim/pad audio to this duration
+    "max_len_sec":           15,        # trim/pad audio to this duration
 
     # model dimensions
     "d_model":               768,         # must be divisible by 3 (192, 384, or 768)

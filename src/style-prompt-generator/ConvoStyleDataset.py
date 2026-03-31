@@ -40,8 +40,8 @@ class ConvoStyleDataset(Dataset):
         self.h5_path    = Path(h5_path)
         self.meta_path  = Path(meta_path)
         self.transform  = transform
-        self.sr         = sample_rate
-        self.max_len    = int(max_len_sec * sample_rate) if max_len_sec else None
+        self.sr      = int(sample_rate)
+        self.max_len = int(float(max_len_sec) * self.sr) if max_len_sec else None
         self.num_turns  = num_turns
 
         meta = pd.read_parquet(meta_path)
