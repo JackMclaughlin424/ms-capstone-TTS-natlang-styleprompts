@@ -8,14 +8,9 @@ reading all hyperparameters from a JSON config file.
 import argparse
 import json
 import logging
-import math
-import os
-import random
-import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
-import numpy as np
 import torch
 import torch.nn as nn
 
@@ -24,16 +19,17 @@ from StylePromptGenerator import (
 )
 
 import sys
+import tqdm
 
 from train_helpers import *
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)s  %(message)s",
-    datefmt="%H:%M:%S",
-    stream=sys.stdout,   # <-- send root handler to stdout
-)
+_handler = logging.StreamHandler(sys.stdout)
+_handler.setLevel(logging.INFO)
+_handler.setFormatter(logging.Formatter("%(asctime)s  %(levelname)s  %(message)s", datefmt="%H:%M:%S"))
+logging.getLogger().addHandler(_handler)
+logging.getLogger().setLevel(logging.INFO)
 log = logging.getLogger(__name__)
+
 
 
 # Loss
@@ -170,7 +166,9 @@ def run_epoch(
     ctx = torch.enable_grad if is_train else torch.no_grad
  
     with ctx():
-        for batch in loader:
+        pbar = tqdm(loader, desc=f"{tag} epoch {epoch}", unit="batch", leave=True, dynamic_ncols=True)
+
+        for batch in pbar:
             with torch.autocast(device_type=device.type, enabled=cfg["fp16"]):
                 loss = compute_loss(model, batch, device, cfg)
  
@@ -271,7 +269,10 @@ def train(cfg: Dict[str, Any]):
  
     best_val_loss = float("inf")
  
-    for epoch in range(start_epoch, cfg["num_epochs"]):
+    for epoch in tqdm(
+        range(start_epoch, cfg["num_epochs"]), desc="Epochs"
+        , unit="epoch", initial=start_epoch, total=cfg["num_epochs"]
+    ):
         train_loss, global_step = run_epoch(
             model, train_loader, optimizer, scheduler, scaler,
             device, cfg, epoch, global_step, wandb_run, is_train=True,
