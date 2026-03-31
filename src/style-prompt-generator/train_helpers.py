@@ -320,7 +320,11 @@ def build_dataloaders(cfg: Dict[str, Any], log):
         num_workers=cfg["num_workers"],
         pin_memory=True,
     )
-    train_loader = DataLoader(train_ds, batch_size=cfg["batch_size"], shuffle=False, **loader_kwargs)
+
+    g = torch.Generator()
+    g.manual_seed(cfg["seed"])
+
+    train_loader = DataLoader(train_ds, batch_size=cfg["batch_size"], shuffle=True, generator=g, **loader_kwargs)
     val_loader   = DataLoader(val_ds,   batch_size=cfg["batch_size"], shuffle=False, **loader_kwargs)
 
     log.info(f"Chains: {len(train_ds)} train  |  {len(val_ds)} val")
