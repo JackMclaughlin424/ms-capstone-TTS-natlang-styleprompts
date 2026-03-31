@@ -27,7 +27,7 @@
     "max_new_tokens": 80,
     "_comment_param_section_training": "the following parameters pertain to the training setup",
     "batch_size": 8,
-    "num_epochs": 50,
+    "num_epochs": 10,
     "learning_rate": 5e-4,
     "weight_decay": 1e-3,
     "grad_clip": 1.0,
