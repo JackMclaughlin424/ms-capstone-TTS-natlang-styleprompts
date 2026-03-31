@@ -247,12 +247,15 @@ class InterSpeakerTransformer(nn.Module):
         same_speaker_bool_mask = (speaker_ids_tensor.unsqueeze(2) == speaker_ids_tensor.unsqueeze(1))
 
         # Inter-speaker mask: allow attention between different speakers, block attention to the same speaker
-        # Additive mask: 0 for allowed, -inf for blocked
         inf_val = torch.finfo(turn_embeddings.dtype).min
-        # Explicitly cast 0. to the correct dtype for torch.where
         zero_tensor = torch.tensor(0., dtype=turn_embeddings.dtype, device=device)
         inter_speaker_additive_mask = torch.where(~same_speaker_bool_mask, zero_tensor, inf_val)
 
+        # Always allow self-attention so turn 0 (and any turn with no prior cross-speaker turn)
+        # never gets an all-masked row, which would produce NaN from softmax.
+        eye = torch.eye(seq_len, dtype=torch.bool, device=device).unsqueeze(0)  # (1, S, S)
+        inter_speaker_additive_mask = inter_speaker_additive_mask.masked_fill(eye, 0.0)
+        
         # Combine causal mask with inter-speaker mask
         final_mask = causal_mask.unsqueeze(0) + inter_speaker_additive_mask
 
