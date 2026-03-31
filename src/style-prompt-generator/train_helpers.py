@@ -153,7 +153,7 @@ def load_config(path: str) -> Dict[str, Any]:
     return cfg
 
 
-def apply_overrides(cfg: Dict[str, Any], overrides, log):
+def apply_overrides(cfg: Dict[str, Any], overrides, log=None):
     if not overrides:
         return cfg
     for item in overrides:
@@ -172,7 +172,11 @@ def apply_overrides(cfg: Dict[str, Any], overrides, log):
             cfg[key] = float(raw)
         else:
             cfg[key] = raw
-        log.info(f"Override: {key} = {cfg[key]!r}")
+
+        if log is not None:
+            log.info(f"Override: {key} = {cfg[key]!r}")
+        else:
+            print(f"Override: {key} = {cfg[key]!r}")
     return cfg
 
 # Reproducibility
