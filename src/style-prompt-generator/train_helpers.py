@@ -1,4 +1,6 @@
-
+import nltk
+from nltk.translate.meteor_score import meteor_score as _meteor
+from bert_score import score as _bert_score
 import argparse
 import json
 import logging
@@ -433,3 +435,44 @@ def wandb_finish(run):
         run.finish()
 
 
+# Evaluation metrics
+
+def compute_bertscore(
+    preds: List[str],
+    refs: List[str],
+    device: str = "cpu",
+) -> Dict[str, float]:
+    """Compute BERTScore (P, R, F1) mean and std over a batch of predictions."""
+    from bert_score import score as _bert_score
+    P, R, F1 = _bert_score(preds, refs, lang="en", device=device, verbose=False)
+    return {
+        "bertscore_precision_mean": P.mean().item(),
+        "bertscore_precision_std":  P.std().item(),
+        "bertscore_recall_mean":    R.mean().item(),
+        "bertscore_recall_std":     R.std().item(),
+        "bertscore_f1_mean":        F1.mean().item(),
+        "bertscore_f1_std":         F1.std().item(),
+    }
+
+
+def compute_meteor(
+    preds: List[str],
+    refs: List[str],
+) -> Dict[str, float]:
+    """Compute METEOR mean and std over a batch of predictions."""
+    import nltk
+    from nltk.translate.meteor_score import meteor_score as _meteor
+
+    try:
+        nltk.data.find("corpora/wordnet")
+    except LookupError:
+        nltk.download("wordnet", quiet=True)
+
+    scores = np.array([
+        _meteor([ref.split()], pred.split())
+        for pred, ref in zip(preds, refs)
+    ])
+    return {
+        "meteor_mean": float(scores.mean()) if len(scores) else 0.0,
+        "meteor_std":  float(scores.std())  if len(scores) else 0.0,
+    }
