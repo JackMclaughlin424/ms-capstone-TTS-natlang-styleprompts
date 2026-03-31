@@ -41,5 +41,5 @@
     "seed": 42,
     "num_workers": 4,
     "fp16": false,
-    "log_every_n_steps": 50
+    "log_every_n_steps": 10
 }
