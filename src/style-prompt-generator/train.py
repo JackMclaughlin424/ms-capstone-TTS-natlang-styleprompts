@@ -228,7 +228,7 @@ class TqdmHandler(logging.StreamHandler):
         tqdm.write(self.format(record))
 
 
-def train(cfg: Dict[str, Any]):
+def train(cfg: Dict[str, Any], resume=True):
     set_seed(cfg["seed"])
  
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -275,7 +275,7 @@ def train(cfg: Dict[str, Any]):
  
     # resume if a checkpoint exists in the output dir
     existing = sorted(out_dir.glob("ckpt_epoch*.pt"))
-    if existing:
+    if resume and existing:
         start_epoch, global_step = load_checkpoint(
             str(existing[-1]), log, model, optimizer, scheduler
         )
@@ -377,6 +377,8 @@ def parse_args():
         "--override", nargs="*", metavar="KEY=VALUE",
         help="Override individual config fields (e.g. --override learning_rate=1e-4)"
     )
+
+    p.add_argument("--no-resume", action="store_true", help="Ignore existing checkpoints and train from scratch")
     return p.parse_args()
 
 
@@ -387,4 +389,5 @@ if __name__ == "__main__":
     args = parse_args()
     cfg = load_config(args.config)
     cfg = apply_overrides(cfg, args.override)
-    train(cfg)
+    train(cfg, resume=not args.no_resume)
+
