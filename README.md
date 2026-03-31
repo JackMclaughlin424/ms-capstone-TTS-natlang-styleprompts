@@ -17,7 +17,7 @@ Create the dataset preprocessing and EDA conda environment using the environment
 
 ```conda env create -f 'src/dataset_preprocessing_environment.yml'```
 
-#### Downloading data
+#### Downloading source data
 
 This project utilizes multiple datasets:
 

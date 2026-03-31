@@ -277,39 +277,8 @@ def collate_pad(batch):
     return out
 
 
-def main():
-    """
-    Sanity checks for the ConvoStyleDataset class.
-    """
-    from torch.utils.data import DataLoader
 
-    # H5_PATH     = "/content/drive/MyDrive/capstone/data/merged_audio_500.h5" # <--- UPDATE THIS PATH
-    # META_PATH   = "/content/drive/MyDrive/capstone/data/merged_metadata_500.parquet" # <--- UPDATE THIS PATH
-    H5_PATH     = "../data_TEMP/merged_audio_500.h5" # <--- UPDATE THIS PATH
-    META_PATH   = "../data_TEMP/merged_metadata_500.parquet" # <--- UPDATE THIS PATH
-    BATCH_SIZE = 1      # Reduced batch size for memory optimization. Try 1 first. <--- MODIFIED
-    SAMPLE_RATE = 16_000
-    MAX_NUM_TURNS = 5
-
-    dataset = ConvoStyleDataset(
-        h5_path=H5_PATH,
-        meta_path=META_PATH,
-        meta_columns=["transcription"],
-        sample_rate=SAMPLE_RATE,
-        num_turns=MAX_NUM_TURNS # Changed from 5 to 1 to allow loading single-turn utterances for diagnosis
-        # max_len_sec=10.0, # Uncomment and adjust this value (e.g., 10 seconds) for further memory optimization.
-        # no max_len_sec -- collate_pad handles variable lengths
-    )
-
-    loader = DataLoader(
-        dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=True,
-        collate_fn=collate_pad,
-        num_workers=0,
-    )
-
-
+def test_assertions(dataset, loader):
     # data batch test
     batch = next(iter(loader))
     print(batch.keys())
@@ -369,6 +338,91 @@ def main():
             print(f"    {k}: {display}")
 
     print("-" * 60)
+
+
+def test_conversation_assertions(train_ds, val_ds):
+    """
+    Sanity checks for ConvoStyleDataset.train_val_split:
+      - no conversation bleeds between train and val
+      - prints conversation and chain counts for both splits
+    """
+    
+
+    # extract conv_ids from each split's chains
+    # each chain row is a pandas Series, so conv_id is directly accessible
+    def get_conv_ids(ds: ConvoStyleDataset) -> set:
+        ids = set()
+        for chain in ds._chains:
+            ids.add(chain[0]["conv_id"])  # all turns share a conv_id; use first
+        return ids
+
+    train_conv_ids = get_conv_ids(train_ds)
+    val_conv_ids   = get_conv_ids(val_ds)
+    overlap        = train_conv_ids & val_conv_ids
+
+    print(f"\n--- Conversation counts ---")
+    print(f"  Train conversations : {len(train_conv_ids)}")
+    print(f"  Val conversations   : {len(val_conv_ids)}")
+    print(f"  Total conversations : {len(train_conv_ids | val_conv_ids)}")
+    print(f"  Overlapping         : {len(overlap)}")
+
+    print(f"\n--- Chain counts ---")
+    print(f"  Train chains : {len(train_ds)}")
+    print(f"  Val chains   : {len(val_ds)}")
+    print(f"  Total chains : {len(train_ds) + len(val_ds)}")
+
+    assert len(overlap) == 0, (
+        f"Data leakage detected: {len(overlap)} conversation(s) appear in both splits.\n"
+        f"  Example conv_ids: {list(overlap)[:5]}"
+    )
+    print("\nAssertion passed: no conversation overlap between train and val.")
+
+
+def main():
+    """
+    Sanity checks for the ConvoStyleDataset class.
+    """
+    from torch.utils.data import DataLoader
+
+    # H5_PATH     = "/content/drive/MyDrive/capstone/data/merged_audio_500.h5" # <--- UPDATE THIS PATH
+    # META_PATH   = "/content/drive/MyDrive/capstone/data/merged_metadata_500.parquet" # <--- UPDATE THIS PATH
+    H5_PATH     = "../data_TEMP/merged_audio_full.h5" # <--- UPDATE THIS PATH
+    META_PATH   = "../data_TEMP/merged_metadata_full.parquet" # <--- UPDATE THIS PATH
+    BATCH_SIZE = 8      # Reduced batch size for memory optimization. Try 1 first. <--- MODIFIED
+    SAMPLE_RATE = 16_000
+    MAX_NUM_TURNS = 5
+
+    dataset = ConvoStyleDataset(
+        h5_path=H5_PATH,
+        meta_path=META_PATH,
+        meta_columns=["transcription", "text_description"],
+        sample_rate=SAMPLE_RATE,
+        num_turns=MAX_NUM_TURNS 
+    )
+
+    loader = DataLoader(
+        dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        collate_fn=collate_pad,
+        num_workers=0,
+    )
+
+    test_assertions(dataset, loader)
+
+
+    train_ds, val_ds = ConvoStyleDataset.train_val_split(
+        # val_split=VAL_SPLIT,  --> use defaults
+        # seed=SEED,
+        h5_path=H5_PATH,
+        meta_path=META_PATH,
+        meta_columns=["transcription", "text_description"],
+        sample_rate=SAMPLE_RATE,
+        num_turns=MAX_NUM_TURNS,
+    )
+
+    test_conversation_assertions(train_ds, val_ds)
+    
 
 
 if __name__=="__main__":
