@@ -568,6 +568,12 @@ def train(cfg: Dict[str, Any]):
  
     out_dir = Path(cfg["output_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # add file handler so logs are saved alongside checkpoints
+    file_handler = logging.FileHandler(out_dir / "train.log")
+    file_handler.setFormatter(logging.Formatter("%(asctime)s  %(levelname)s  %(message)s", datefmt="%H:%M:%S"))
+    logging.getLogger().addHandler(file_handler)
+
  
     # save the resolved config for reproducibility
     with open(out_dir / "config.json", "w") as f:
@@ -628,6 +634,7 @@ def train(cfg: Dict[str, Any]):
             ckpt_path = save_checkpoint(
                 model, optimizer, scheduler, epoch, global_step, train_loss, cfg, out_dir
             )
+            log.info(f"Keeping last {cfg['keep_last_n_ckpts']} checkpoints, pruning older ones.")
             prune_old_checkpoints(out_dir, cfg["keep_last_n_ckpts"])
  
             # log the checkpoint as a W&B artifact so you can restore any saved version
