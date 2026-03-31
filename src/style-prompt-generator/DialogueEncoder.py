@@ -11,15 +11,21 @@ class SelfAttentivePooling(nn.Module):
         self.scorer = nn.Linear(dim, 1, bias=False)
 
     def forward(self, hidden: torch.Tensor, mask: torch.Tensor = None) -> torch.Tensor:
-        # hidden: (B, T, d),  mask: (B, T) -- 1 for real tokens, 0 for padding
         scores = self.scorer(hidden).squeeze(-1)  # (B, T)
 
         if mask is not None:
-            # push padding positions to -inf so softmax zeroes them out
             scores = scores.masked_fill(~mask.bool(), float("-inf"))
+            # if an entire row is masked (e.g. zero-length audio, or inter-speaker at turn 0)
+            # softmax would return NaN; fall back to uniform attention over all positions
+            all_masked = ~mask.bool().any(dim=-1, keepdim=True)  # (B, 1)
+            scores = scores.masked_fill(all_masked, 0.0)
 
         weights = F.softmax(scores, dim=-1)
-        return (weights.unsqueeze(-1) * hidden).sum(dim=1)  # (B, d)
+
+        if mask is not None:
+            weights = weights.masked_fill(all_masked, 0.0)  # zero-out fully-masked rows
+
+        return (weights.unsqueeze(-1) * hidden).sum(dim=1)
     
 class ModalityEncoder(nn.Module):
 
@@ -319,7 +325,7 @@ class ContextAwareTransformer(nn.Module):
 
         # Generate causal mask: ensures each position only attends to previous positions
         seq_len = turn_embeddings.shape[1] # Sequence length is the second dimension for batch_first=True
-        src_mask = nn.Transformer.generate_square_subsequent_mask(seq_len).to(turn_embeddings.device)
+        src_mask = nn.Transformer.generate_square_subsequent_mask(seq_len).to(turn_embeddings.device).to(turn_embeddings.dtype)
 
         # Pass through the Transformer Encoder with the mask
         output = self.transformer_encoder(turn_embeddings, mask=src_mask)
