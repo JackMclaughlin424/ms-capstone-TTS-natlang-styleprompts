@@ -19,14 +19,11 @@ from StylePromptGenerator import (
 )
 
 import sys
-import tqdm
+from tqdm import tqdm
 
 from train_helpers import *
 
-_handler = logging.StreamHandler()
-_handler.setLevel(logging.INFO)
-_handler.setFormatter(logging.Formatter("%(asctime)s  %(levelname)s  %(message)s", datefmt="%H:%M:%S"))
-logging.getLogger().addHandler(_handler)
+logging.getLogger().addHandler(logging.NullHandler())
 logging.getLogger().setLevel(logging.INFO)
 log = logging.getLogger(__name__)
 
@@ -219,6 +216,12 @@ def run_epoch(
     return avg, global_step
 
 
+# tqdm-safe console handler
+class TqdmHandler(logging.StreamHandler):
+    def emit(self, record):
+        tqdm.write(self.format(record))
+        
+
 def train(cfg: Dict[str, Any]):
     set_seed(cfg["seed"])
  
@@ -234,12 +237,17 @@ def train(cfg: Dict[str, Any]):
  
     wandb_run = wandb_init(cfg, log)
 
-    # add file handler AFTER wandb_init so wandb doesn't clobber it
+
+    console_handler = TqdmHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(logging.Formatter("%(asctime)s  %(levelname)s  %(message)s", datefmt="%H:%M:%S"))
+    logging.getLogger().addHandler(console_handler)
+
     file_handler = logging.FileHandler(out_dir / "train.log")
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(logging.Formatter("%(asctime)s  %(levelname)s  %(message)s", datefmt="%H:%M:%S"))
     logging.getLogger().addHandler(file_handler)
-    log.info("File logging initialized.")  # confirms the handler works
+    log.info("File logging initialized.")
  
     train_loader, val_loader, dataset = build_dataloaders(cfg, log)
     model = build_model(cfg, device, log)
