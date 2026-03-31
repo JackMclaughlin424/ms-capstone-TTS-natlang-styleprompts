@@ -636,7 +636,8 @@ def train(cfg: Dict[str, Any]):
                 artifact = wandb.Artifact(
                     name=f"checkpoint-{wandb_run.id}",
                     type="model",
-                    metadata={"epoch": epoch, "step": global_step, "val_loss": best_val_loss},
+                    metadata={"epoch": epoch, "step": global_step, "val_loss": best_val_loss if best_val_loss != float("inf") else None},
+
                 )
                 artifact.add_file(str(ckpt_path))
                 wandb_run.log_artifact(artifact)
