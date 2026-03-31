@@ -475,24 +475,27 @@ class SCFA(nn.Module):
         # cross-modal fusion (sec 2.4, eqs 12-15)
         self.cfa = CrossModalFusionAttention(d_model, nhead, dropout)
 
+        # project d_model -> d_sub before each set of sub-transformers
+        self.proj_audio = nn.Linear(d_model, d_sub)
+        self.proj_text  = nn.Linear(d_model, d_sub)
+
 
     def _intra_modal_encode(
         self,
-        emb:             torch.Tensor,
+        emb:             torch.Tensor,   # (B, T, d_model) -- kept for FFN residual
+        emb_sub:         torch.Tensor,   # (B, T, d_sub)   -- input to sub-transformers
         ctx_transformer: ContextAwareTransformer,
         spk_transformer: SpeakerAwareTransformer,
         ffn:             "_IntraModalFFN",
         speaker_ids:     List[List[str]],
     ) -> torch.Tensor:
-        
 
-        z_ctx   = ctx_transformer(emb)               # global context stream (eqs 5-6)
-        z_intra, z_inter = spk_transformer(emb, speaker_ids)  # speaker streams (eqs 7-8)
- 
-        # concat the three d_sub streams -> (B, T, d_model), no projection needed
-        # this is the "concatenated in series" the paper describes before eqs 9-11
+        z_ctx            = ctx_transformer(emb_sub)
+        z_intra, z_inter = spk_transformer(emb_sub, speaker_ids)
+
         z_cat = torch.cat([z_ctx, z_intra, z_inter], dim=-1)
-        return ffn(z_cat, emb)  # eqs 9-11
+        return ffn(z_cat, emb)  # residual uses full d_model emb
+
  
     def forward(
         self,
@@ -511,14 +514,19 @@ class SCFA(nn.Module):
         # so both streams are grounded in the same turn positions going into CFA
         audio_emb = self.turn_pos_enc(audio_emb)
         text_emb  = self.turn_pos_enc(text_emb)
+
  
-        # 2, 3 intra-modal conversation encoding 
+        # project to d_sub for sub-transformers
+        audio_sub = self.proj_audio(audio_emb)
+        text_sub  = self.proj_text(text_emb)
+
         z_audio = self._intra_modal_encode(
-            audio_emb, self.ctx_audio, self.spk_audio, self.ffn_audio, speaker_ids
+            audio_emb, audio_sub, self.ctx_audio, self.spk_audio, self.ffn_audio, speaker_ids
         )
         z_text = self._intra_modal_encode(
-            text_emb, self.ctx_text, self.spk_text, self.ffn_text, speaker_ids
+            text_emb, text_sub, self.ctx_text, self.spk_text, self.ffn_text, speaker_ids
         )
+
         # both (B, T, d_model)
  
         # 4 cross-modal fusion 
