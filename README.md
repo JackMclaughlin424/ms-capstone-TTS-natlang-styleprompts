@@ -55,9 +55,14 @@ src/get_data.py --dataset paraspeechcaps
 
     Run the script ```src/data_helpers/build_h5py_dataset.py``` to output one data file containing all training data used for the project, and one metadata file containing annotations and other metadata.
 
-    Example run:
+    Example run (small subset, 100 conversations 5 turns each):
     ```python
     python .\build_h5py_dataset.py --df '../data_TEMP/merged_PSC_StyleTalk_CLEANED.parquet' --audio_root_PSC '../data_TEMP/paraspeechcaps/audio/expresso' --audio_root_ST '../data_TEMP/styletalk/audio' --out_h5 '..\data_TEMP\merged_audio.h5' --out_meta '..\data_TEMP\merged_metadata.parquet' --DEBUG_MAX_ROW 500 --DEBUG_MAX_TURN 5 --DEBUG_PERCENT_EXPRESSO .5 --SEED 42 
+    ```
+
+    Example run 2, full dataset >2000 conversations of different turn lengths
+    ```python
+    python .\build_h5py_dataset.py --df '../data_TEMP/merged_PSC_StyleTalk_CLEANED.parquet' --audio_root_PSC '../data_TEMP/paraspeechcaps/audio/expresso' --audio_root_ST '../data_TEMP/styletalk/audio' --out_h5 '..\data_TEMP\merged_audio_full.h5' --out_meta '..\data_TEMP\merged_metadata_full.parquet' --SEED 42 
     ```
 
 ### 2. Model

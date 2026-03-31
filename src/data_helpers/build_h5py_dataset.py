@@ -71,9 +71,11 @@ def build(df_path: str, audio_root_PSC: str, audio_root_ST: str,
           # Debugging/test parameters
           , DEBUG_MAX_ROW, DEBUG_MAX_TURNS, DEBUG_PERCENT_EXPRESSO, SEED):
 
-    df_path        = Path(df_path)
-    audio_root_PSC = Path(audio_root_PSC)
-    audio_root_ST  = Path(audio_root_ST)
+    # resolve() fixes max path length errors
+    df_path        = Path(df_path).resolve()
+    audio_root_PSC = Path(audio_root_PSC).resolve()
+    audio_root_ST  = Path(audio_root_ST).resolve()
+
 
     if DEBUG_MAX_ROW % DEBUG_MAX_TURNS > 0 and DEBUG_MAX_ROW >= 0 and DEBUG_MAX_TURNS >= 0:
         # round down so we don't cut a conversation mid-turn
@@ -296,10 +298,10 @@ def parse_args():
     p.add_argument("--resample_rate",  default=None, type=int,
                    help="Resample all audio to this rate (Hz). Files with a native SR below this value will error.")
 
+    p.add_argument("--SEED", type=int, help="Random seed for conversation sampling")
     p.add_argument("--DEBUG_MAX_ROW",   default=-1,   help="DEBUGGING: number of rows to use for smaller sample")
     p.add_argument("--DEBUG_MAX_TURNS", default=-1, help="DEBUGGING: only include utterances from conversations with turn_index <= this value")
-    p.add_argument("--DEBUG_PERCENT_EXPRESSO", type=float, help="Fraction of conversations from expresso source (0.0 to 1.0)")
-    p.add_argument("--SEED", type=int, help="Random seed for conversation sampling")
+    p.add_argument("--DEBUG_PERCENT_EXPRESSO", default=-1.0, type=float, help="Fraction of conversations from expresso source (0.0 to 1.0)")
     return p.parse_args()
 
 

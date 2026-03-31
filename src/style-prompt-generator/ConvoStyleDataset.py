@@ -35,6 +35,7 @@ class ConvoStyleDataset(Dataset):
         sample_rate:  int                 = 16_000,
         num_turns:    int                 = 5,
         transform=None,
+        allowed_conv_ids:  Optional[set]       = None, 
     ):
         self.h5_path    = Path(h5_path)
         self.meta_path  = Path(meta_path)
@@ -48,11 +49,16 @@ class ConvoStyleDataset(Dataset):
         # drop hard errors only; text-only rows (-1) are handled per-source below
         meta = meta[meta["hdf5_idx"] >= -1].reset_index(drop=True)
 
+        # filter by allowed conv_ids (explicitly avoids leakage for sliding windows across conversations)
+        if allowed_conv_ids is not None:
+            meta = meta[meta["conv_id"].isin(allowed_conv_ids)].reset_index(drop=True)
+
+
         # index by relative_audio_path so prev_filename lookups are O(1)
         self._path_to_row = meta.set_index("relative_audio_path")
 
         # anchor rows are the "last" turn in each chain we want to load
-        anchors = meta[meta["turn_index"] == (num_turns - 1)].reset_index(drop=True)
+        anchors = meta[meta["turn_index"] >= (num_turns - 1)].reset_index(drop=True)
 
         # resolve every anchor into a full chain, drop any with broken links
         if meta_columns is not None:
@@ -201,6 +207,32 @@ class ConvoStyleDataset(Dataset):
                 self._h5.close()
             except Exception:
                 pass
+
+
+
+    @classmethod
+    def train_val_split(
+        cls,
+        val_split: float = 0.1,
+        seed:      int   = 42,
+        **kwargs,
+    ) -> tuple["ConvoStyleDataset", "ConvoStyleDataset"]:
+        """
+        Split by conversation (not chain) to prevent leakage from sliding-window chains.
+        All kwargs are forwarded to ConvoStyleDataset.__init__ (except allowed_conv_ids).
+        """
+        meta = pd.read_parquet(kwargs["meta_path"])
+        conv_ids = meta["conv_id"].unique()
+
+        rng = np.random.default_rng(seed)
+        rng.shuffle(conv_ids)
+        split = int(len(conv_ids) * (1 - val_split))
+        train_ids, val_ids = set(conv_ids[:split]), set(conv_ids[split:])
+
+        train_ds = cls(**kwargs, allowed_conv_ids=train_ids)
+        val_ds   = cls(**kwargs, allowed_conv_ids=val_ids)
+        return train_ds, val_ds
+
 
 
 def collate_pad(batch):

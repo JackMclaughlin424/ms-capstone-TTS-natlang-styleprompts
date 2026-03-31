@@ -292,21 +292,15 @@ def build_dataloaders(cfg: Dict[str, Any]):
     # num_turns == 0 means script-only (text only), represented as 1 turn with no audio
     effective_turns = max(cfg["num_turns"], 1)
 
-    dataset = ConvoStyleDataset(
+    train_ds, val_ds = ConvoStyleDataset.train_val_split(
+        val_split=cfg["val_split"],
+        seed=cfg["seed"],
         h5_path=cfg["h5_path"],
         meta_path=cfg["meta_path"],
-        meta_columns=["transcription", "text_description"],  # text_description is the training target
+        meta_columns=["transcription", "text_description"], # text_description is GT style description
         sample_rate=cfg["sample_rate"],
         num_turns=effective_turns,
         max_len_sec=cfg["max_len_sec"],
-    )
-
-    val_size = max(1, int(len(dataset) * cfg["val_split"]))
-    train_size = len(dataset) - val_size
-    train_ds, val_ds = random_split(
-        dataset,
-        [train_size, val_size],
-        generator=torch.Generator().manual_seed(cfg["seed"]),
     )
 
     loader_kwargs = dict(
@@ -314,18 +308,11 @@ def build_dataloaders(cfg: Dict[str, Any]):
         num_workers=cfg["num_workers"],
         pin_memory=True,
     )
+    train_loader = DataLoader(train_ds, batch_size=cfg["batch_size"], shuffle=False, **loader_kwargs)
+    val_loader   = DataLoader(val_ds,   batch_size=cfg["batch_size"], shuffle=False, **loader_kwargs)
 
-    # Don't shuffle, rely on seed randomness to ensure reproducible experiments
-    train_loader = DataLoader(
-        train_ds, batch_size=cfg["batch_size"], shuffle=False, **loader_kwargs
-    )
-
-    val_loader = DataLoader(
-        val_ds, batch_size=cfg["batch_size"], shuffle=False, **loader_kwargs
-    )
-
-    log.info(f"Dataset: {len(train_ds)} train  |  {len(val_ds)} val")
-    return train_loader, val_loader, dataset
+    log.info(f"Chains: {len(train_ds)} train  |  {len(val_ds)} val")
+    return train_loader, val_loader, train_ds
 
 
 
