@@ -23,7 +23,7 @@ import tqdm
 
 from train_helpers import *
 
-_handler = logging.StreamHandler(sys.stdout)
+_handler = logging.StreamHandler()
 _handler.setLevel(logging.INFO)
 _handler.setFormatter(logging.Formatter("%(asctime)s  %(levelname)s  %(message)s", datefmt="%H:%M:%S"))
 logging.getLogger().addHandler(_handler)
