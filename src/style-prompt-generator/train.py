@@ -19,7 +19,9 @@ from StylePromptGenerator import (
 )
 
 import sys
-from tqdm import tqdm
+
+from tqdm.auto import tqdm
+
 
 from train_helpers import *
 
