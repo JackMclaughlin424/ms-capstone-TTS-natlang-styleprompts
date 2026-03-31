@@ -115,6 +115,9 @@ class DualModalityEmbedder(nn.Module):
             if text_only is not None and text_only[:, t].all():
                 continue
 
+             # which items in this batch actually have audio for turn t
+            has_audio = (~text_only[:, t].bool()) if text_only is not None else torch.ones(B, dtype=torch.bool, device=device)
+
             audio_t   = audio[:, t, :]    # (B, samples)
             lengths_t = lengths[:, t]     # (B,)
 
@@ -132,7 +135,9 @@ class DualModalityEmbedder(nn.Module):
             mask_ds  = F.interpolate(raw_mask.unsqueeze(1), size=T_out, mode="nearest").squeeze(1).bool()
 
             emb = self.audio_encoder(hidden, mask_ds)  # (B, d)
-            out[:, t, :] = emb
+            # text-only items keep their zero-initialized embedding; writing NaN for them
+            # (from the all-zero mask in SelfAttentivePooling) would corrupt the whole batch
+            out[has_audio, t, :] = emb[has_audio]
 
         return out  # (B, T, d)
 
@@ -255,7 +260,7 @@ class InterSpeakerTransformer(nn.Module):
         # never gets an all-masked row, which would produce NaN from softmax.
         eye = torch.eye(seq_len, dtype=torch.bool, device=device).unsqueeze(0)  # (1, S, S)
         inter_speaker_additive_mask = inter_speaker_additive_mask.masked_fill(eye, 0.0)
-        
+
         # Combine causal mask with inter-speaker mask
         final_mask = causal_mask.unsqueeze(0) + inter_speaker_additive_mask
 
