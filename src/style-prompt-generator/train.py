@@ -44,10 +44,13 @@ from StylePromptGenerator import (
     TINYLLAMA_DIM,
 )
 
+import sys
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)s  %(message)s",
     datefmt="%H:%M:%S",
+    stream=sys.stdout,   # <-- send root handler to stdout
 )
 log = logging.getLogger(__name__)
 
@@ -393,6 +396,10 @@ def compute_loss(
     # get prefix embeddings from the style head
     prefix_embeds = model.style_generator.style_head(dialogue_vec)  # (B, K, TINYLLAMA_DIM)
 
+    if torch.isnan(prefix_embeds).any():
+        log.warning(f"NaN in prefix_embeds! dialogue_vec nan={torch.isnan(dialogue_vec).any()}")
+        return torch.tensor(float('nan'), device=device, requires_grad=True)
+
     B = prefix_embeds.shape[0]
     K = prefix_embeds.shape[1]
 
@@ -437,8 +444,15 @@ def compute_loss(
     token_labels  = input_ids.masked_fill(attn_mask == 0, -100)
     labels        = torch.cat([prefix_labels, token_labels], dim=1)
 
+    valid_label_count = (labels != -100).sum()
+    if valid_label_count == 0:
+        log.warning(f"All labels are -100! anchor_prompts sample: {anchor_prompts[0]!r}")
+
     # cast input embeddings to TinyLlama dtype bf16
     input_embeds = input_embeds.to(llm.dtype)
+
+    if torch.isnan(input_embeds).any() or torch.isinf(input_embeds).any():
+        log.warning(f"NaN/Inf in input_embeds after dtype cast. Max abs: {input_embeds.abs().max().item():.2e}")
 
     outputs = llm(
         inputs_embeds=input_embeds,
@@ -569,17 +583,18 @@ def train(cfg: Dict[str, Any]):
     out_dir = Path(cfg["output_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # add file handler so logs are saved alongside checkpoints
-    file_handler = logging.FileHandler(out_dir / "train.log")
-    file_handler.setFormatter(logging.Formatter("%(asctime)s  %(levelname)s  %(message)s", datefmt="%H:%M:%S"))
-    logging.getLogger().addHandler(file_handler)
-
- 
     # save the resolved config for reproducibility
     with open(out_dir / "config.json", "w") as f:
         json.dump(cfg, f, indent=2)
  
     wandb_run = wandb_init(cfg)
+
+    # add file handler AFTER wandb_init so wandb doesn't clobber it
+    file_handler = logging.FileHandler(out_dir / "train.log")
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(logging.Formatter("%(asctime)s  %(levelname)s  %(message)s", datefmt="%H:%M:%S"))
+    logging.getLogger().addHandler(file_handler)
+    log.info("File logging initialized.")  # confirms the handler works
  
     train_loader, val_loader, dataset = build_dataloaders(cfg)
     model = build_model(cfg, device)
