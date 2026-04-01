@@ -65,7 +65,8 @@ class StylePromptHead(nn.Module):
             dropout=dropout,
             batch_first=True,
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_mapping_layers)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_mapping_layers, enable_nested_tensor=False)
+
 
 
     def forward(self, dialogue_vec: torch.Tensor) -> torch.Tensor:

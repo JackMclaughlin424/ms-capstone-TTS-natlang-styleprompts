@@ -174,7 +174,8 @@ class IntraSpeakerTransformer(nn.Module):
             dropout=dropout,
             batch_first=True
         )
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_encoder_layers)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_encoder_layers, enable_nested_tensor=False)
+
 
     def forward(self, turn_embeddings: torch.Tensor, speaker_ids_list: List[List[str]]):
         B, seq_len, _ = turn_embeddings.shape
@@ -236,7 +237,8 @@ class InterSpeakerTransformer(nn.Module):
             dropout=dropout,
             batch_first=True
         )
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_encoder_layers)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_encoder_layers, enable_nested_tensor=False)
+
 
     def forward(self, turn_embeddings: torch.Tensor, speaker_ids_list: List[List[str]]):
         B, seq_len, _ = turn_embeddings.shape
@@ -326,7 +328,8 @@ class ContextAwareTransformer(nn.Module):
             batch_first=True # Set batch_first to True for (B, S, E) input
         )
         # TransformerEncoder stacks multiple EncoderLayers
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_encoder_layers)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_encoder_layers, enable_nested_tensor=False)
+
 
 
     def forward(self, turn_embeddings: torch.Tensor):

@@ -193,8 +193,6 @@ def compute_bert_embeddings(
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Precompute WavLM + BERT embeddings")
-    p.add_argument("--config",       type=str, default=None,
-                   help="Path to training JSON config (overrides individual path flags)")
     p.add_argument("--h5_path",      type=str, default=None)
     p.add_argument("--meta_path",    type=str, default=None)
     p.add_argument("--output_h5",    type=str, default=None,
@@ -214,20 +212,11 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    # ---- resolve paths (config overrides CLI flags) ----
-    if args.config is not None:
-        with open(args.config) as f:
-            cfg = json.load(f)
-        h5_path   = cfg.get("h5_path",   args.h5_path)
-        meta_path = cfg.get("meta_path", args.meta_path)
-        args.max_len_sec  = cfg.get("max_len_sec",  args.max_len_sec)
-        args.sample_rate  = cfg.get("sample_rate",  args.sample_rate)
-    else:
-        h5_path   = args.h5_path
-        meta_path = args.meta_path
+    h5_path   = args.h5_path
+    meta_path = args.meta_path
 
     if not h5_path or not meta_path:
-        sys.exit("ERROR: provide --h5_path and --meta_path (or --config)")
+        sys.exit("ERROR: provide --h5_path and --meta_path")
 
     h5_path   = Path(h5_path)
     meta_path = Path(meta_path)
