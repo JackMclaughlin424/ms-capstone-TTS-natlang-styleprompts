@@ -148,16 +148,17 @@ def wandb_finish(run):
 
 
 
-def load_tinyllama(device: str):
-    tokenizer = AutoTokenizer.from_pretrained(LLM_REPO)
-    model = AutoModelForCausalLM.from_pretrained(LLM_REPO, torch_dtype=torch.float32)
+def load_llm(device: str, repo: str = LLM_REPO):
+    tokenizer = AutoTokenizer.from_pretrained(repo)
+    model = AutoModelForCausalLM.from_pretrained(repo, torch_dtype=torch.float32)
     model = model.to(device).eval()
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     return tokenizer, model
 
 
-def query_tinyllama(tokenizer, model, system_prompt, user_prompt, device, max_new_tokens) -> str:
+
+def query_llm(tokenizer, model, system_prompt, user_prompt, device, max_new_tokens) -> str:
     # Raw completion format — lets few-shot examples condition the pattern directly
     # rather than the chat template overriding with instruction-following behavior
     full_prompt = f"{system_prompt}\n\n---\n\n{user_prompt}"
@@ -189,7 +190,9 @@ def main(
     max_new_tokens: int = 80,
     max_len_sec: int = 15,
     seed: int = 42,
+    llm_repo: str = LLM_REPO,
 ):
+
     random.seed(seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -212,10 +215,10 @@ def main(
     print(f"\n{len(query_indices)} query chains sampled for evaluation.")
 
     print(f"\nLoading TinyLlama on {device}...")
-    tokenizer, model = load_tinyllama(device)
+    tokenizer, model = load_llm(device, repo=llm_repo)
 
     wandb_run = wandb_init({
-        "model":            LLM_REPO,
+        "model":            llm_repo,
         "num_turns":        num_turns,
         "num_few_shot":     num_few_shot,
         "num_eval_samples": num_eval_samples,
@@ -223,6 +226,7 @@ def main(
         "max_len_sec":      max_len_sec,
         "seed":             seed,
     })
+
 
     all_preds, all_refs = [], []
 
@@ -233,7 +237,7 @@ def main(
 
         query_chain  = ds[qi]
         user_prompt  = build_user_prompt(query_chain)
-        prediction   = query_tinyllama(tokenizer, model, system_prompt, user_prompt, device, max_new_tokens)
+        prediction   = query_llm(tokenizer, model, system_prompt, user_prompt, device, max_new_tokens)
 
         ground_truth = query_chain[-1].get("text_description", "").strip()
 
@@ -271,6 +275,8 @@ def parse_args():
     p.add_argument("--num_eval_samples", type=int,   default=50,     help="Number of query chains to evaluate (default: 50)")
     p.add_argument("--max_new_tokens",   type=int,   default=80,     help="Max tokens to generate per prediction (default: 80)")
     p.add_argument("--max_len_sec",      type=int,   default=15,     help="Max audio length in seconds (default: 15)")
+    p.add_argument("--llm_repo", type=str, default=LLM_REPO, help="HuggingFace repo for the LLM (default: Llama 3.2 3B)")
+
     p.add_argument("--seed",             type=int,   default=42,     help="Random seed (default: 42)")
     return p.parse_args()
 
