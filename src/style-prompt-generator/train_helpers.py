@@ -95,7 +95,6 @@ DEFAULTS: Dict[str, Any] = {
     # reproducibility / efficiency
     "seed":                  42,
     "num_workers":           4,
-    "fp16":                  False,       # mixed-precision training
     "sample_rate":           16_000,
 
     # logging
@@ -288,7 +287,7 @@ def build_model(cfg: Dict[str, Any], device: torch.device, log) -> SCFAWithStyle
     ).to(device)
 
     tokenizer_llm = AutoTokenizer.from_pretrained(cfg["llm_repo"])
-    llm = AutoModelForCausalLM.from_pretrained(cfg["llm_repo"]).to(device)
+    llm = AutoModelForCausalLM.from_pretrained(cfg["llm_repo"], torch_dtype=torch.bfloat16).to(device)
     if tokenizer_llm.pad_token is None:
         tokenizer_llm.pad_token = tokenizer_llm.eos_token
 

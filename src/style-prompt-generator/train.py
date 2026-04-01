@@ -172,7 +172,7 @@ def run_epoch(
         pbar = tqdm(loader, desc=f"{tag} epoch {epoch}", unit="batch", leave=True, dynamic_ncols=True)
 
         for batch in pbar:
-            with torch.autocast(device_type=device.type, enabled=cfg["fp16"]):
+            with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
                 loss = compute_loss(model, batch, device, cfg)
  
             if is_train:
