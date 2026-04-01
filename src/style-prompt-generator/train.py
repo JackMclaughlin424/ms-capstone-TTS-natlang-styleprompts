@@ -158,7 +158,7 @@ def _grad_norm(model: nn.Module) -> float:
 
 
 def run_epoch(
-    model, loader, optimizer, scheduler, scaler,
+    model, loader, optimizer, scheduler, 
     device, cfg, epoch, global_step, wandb_run, is_train=True,
 ) -> tuple[float, int]:
     model.train(is_train)
@@ -177,24 +177,13 @@ def run_epoch(
  
             if is_train:
                 optimizer.zero_grad()
-                if scaler is not None:
-                    scaler.scale(loss).backward()
-                    if cfg["grad_clip"]:
-                        scaler.unscale_(optimizer)
-                        nn.utils.clip_grad_norm_(
-                            [p for p in model.parameters() if p.requires_grad],
-                            cfg["grad_clip"],
-                        )
-                    scaler.step(optimizer)
-                    scaler.update()
-                else:
-                    loss.backward()
-                    if cfg["grad_clip"]:
-                        nn.utils.clip_grad_norm_(
-                            [p for p in model.parameters() if p.requires_grad],
-                            cfg["grad_clip"],
-                        )
-                    optimizer.step()
+                loss.backward()
+                if cfg["grad_clip"]:
+                    nn.utils.clip_grad_norm_(
+                        [p for p in model.parameters() if p.requires_grad],
+                        cfg["grad_clip"],
+                    )
+                optimizer.step()
  
                 scheduler.step()
                 global_step += 1
@@ -266,10 +255,7 @@ def train(cfg: Dict[str, Any], resume=True):
     if wandb_run is not None:
         import wandb
         wandb_run.watch(model, log="gradients", log_freq=cfg["log_every_n_steps"] * 5)
- 
-    # mixed-precision scaler; only active when fp16=True
-    scaler = torch.amp.GradScaler(device=device) if cfg["fp16"] and device.type == "cuda" else None
- 
+
     start_epoch = 0
     global_step = 0
  
@@ -288,7 +274,7 @@ def train(cfg: Dict[str, Any], resume=True):
         , unit="epoch", initial=start_epoch, total=cfg["num_epochs"]
     ):
         train_loss, global_step = run_epoch(
-            model, train_loader, optimizer, scheduler, scaler,
+            model, train_loader, optimizer, scheduler, 
             device, cfg, epoch, global_step, wandb_run, is_train=True,
         )
  
@@ -297,7 +283,7 @@ def train(cfg: Dict[str, Any], resume=True):
 
         if (epoch + 1) % cfg["eval_every_n_epochs"] == 0:
             val_loss, _ = run_epoch(
-                model, val_loader, optimizer, scheduler, scaler,
+                model, val_loader, optimizer, scheduler, 
                 device, cfg, epoch, global_step, wandb_run, is_train=False,
             )
             epoch_metrics["epoch/val_loss"] = val_loss
