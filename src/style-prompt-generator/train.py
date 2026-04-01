@@ -245,7 +245,13 @@ def train(cfg: Dict[str, Any], resume=True):
     log.info("File logging initialized.")
  
     train_loader, val_loader, dataset = build_dataloaders(cfg, log)
+    
     model = build_model(cfg, device, log)
+
+    # compile model for faster training
+    model.scfa = torch.compile(model.scfa)
+    model.style_generator.style_head = torch.compile(model.style_generator.style_head)
+
  
     total_steps = len(train_loader) * cfg["num_epochs"]
     optimizer, scheduler = build_optimizer_and_scheduler(model, cfg, total_steps, log)
@@ -268,6 +274,8 @@ def train(cfg: Dict[str, Any], resume=True):
         start_epoch += 1  # resume from the next epoch
  
     best_val_loss = float("inf")
+    patience_counter = 0
+
  
     for epoch in tqdm(
         range(start_epoch, cfg["num_epochs"]), desc="Epochs"
@@ -288,9 +296,19 @@ def train(cfg: Dict[str, Any], resume=True):
             )
             epoch_metrics["epoch/val_loss"] = val_loss
 
-            if val_loss < best_val_loss:
+            min_delta = cfg["early_stopping_min_delta"]
+            if val_loss < best_val_loss - min_delta:
                 best_val_loss = val_loss
+                patience_counter = 0
                 epoch_metrics["epoch/best_val_loss"] = best_val_loss
+            elif cfg["early_stopping_patience"] > 0:
+                patience_counter += 1
+                log.info(f"No improvement for {patience_counter}/{cfg['early_stopping_patience']} epochs.")
+                if patience_counter >= cfg["early_stopping_patience"]:
+                    log.info("Early stopping triggered.")
+                    wandb_log(epoch_metrics, step=global_step, run=wandb_run)
+                    break
+
 
             # generate predictions for a full val pass to compute generation metrics
             model.eval()

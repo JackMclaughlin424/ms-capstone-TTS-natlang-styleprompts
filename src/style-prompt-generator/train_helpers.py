@@ -61,8 +61,8 @@ DEFAULTS: Dict[str, Any] = {
     # prefix / LLM
     "llm_repo":              LLM_REPO,
     "llm_dim":               LLM_DIM,
-    "num_prefix_tokens":     40,          # K in StyleCap notation
-    "num_mapping_layers":    8,
+    "num_prefix_tokens":     20,          # K in StyleCap notation
+    "num_mapping_layers":    4,
     "mapping_nhead":         8,
     "system_prompt":         "",        # "" | "Speaking style:" | custom string
     "max_prompt_tokens": 128,   # system prompt text -- used at both train and inference
@@ -77,9 +77,9 @@ DEFAULTS: Dict[str, Any] = {
     "dialogue_pooler":       "last", # "attentive" | "last"
 
     # training
-    "batch_size":            8,
+    "batch_size":            16,
     "num_epochs":            10,
-    "learning_rate":         5e-4,
+    "learning_rate":         5e-5,
     "weight_decay":          1e-3,
     "grad_clip":             1.0,         # max gradient norm; None to disable
     "warmup_ratio":          0.1,         # fraction of total steps used for LR warmup
@@ -90,7 +90,9 @@ DEFAULTS: Dict[str, Any] = {
     "val_split":             0.1,         # fraction of data held out for validation
     "eval_every_n_epochs":   1,
     "save_every_n_epochs":   1,
-    "keep_last_n_ckpts":     3,           # older checkpoints are deleted
+    "keep_last_n_ckpts":     2,           # older checkpoints are deleted
+    "early_stopping_patience": 3,   # epochs without improvement before stopping; 0 to disable
+    "early_stopping_min_delta": 1e-4,
 
     # reproducibility / efficiency
     "seed":                  42,
