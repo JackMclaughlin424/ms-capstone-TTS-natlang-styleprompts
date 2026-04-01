@@ -4,13 +4,20 @@ Samples 3 random chains from ConvoStyleDataset to use as in-context examples,
 then predicts the style for a query chain's final utterance.
 """
 
+import os
 import random
 import textwrap
+
+import nltk
+from nltk.translate.meteor_score import meteor_score as _meteor
+from bert_score import score as _bert_score
+import numpy as np
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from ConvoStyleDataset import ConvoStyleDataset
 
+from train_helpers import compute_bertscore, compute_meteor
 
 # same repo used by StylePromptGenerator -- keep these in sync
 TINYLLAMA_REPO = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
@@ -21,7 +28,14 @@ META_PATH = "../data_TEMP/merged_metadata_full.parquet"
 
 NUM_TURNS      = 5   # chain length
 NUM_FEW_SHOT   = 3   # examples in the system prompt
+NUM_EVAL_SAMPLES = 50  # how many query chains to evaluate
 RANDOM_SEED    = 42
+
+# W&B config -- set USE_WANDB=False or unset WANDB_API_KEY to disable
+USE_WANDB      = True
+WANDB_PROJECT  = "style-prompt-gen"
+WANDB_ENTITY   = "jdm8943-rochester-institute-of-technology"
+WANDB_RUN_NAME = "baseline-tinyllama-fewshot"
 
 
 def load_dataset(num_turns: int) -> ConvoStyleDataset:
@@ -85,13 +99,13 @@ def build_few_shot_example(chain: list) -> str:
 
 def build_system_prompt(few_shot_chains: list[list]) -> str:
     task_description = textwrap.dedent("""\
-        You are a speech style annotation assistant for a conversational text-to-speech system.
-        Your task is to predict an appropriate natural-language style description for the NEXT utterance
+        You are a prompt assistant for a conversational, instruction-guided text-to-speech system.
+        Your task is to predict an appropriate natural-language style description (style prompt) for the NEXT utterance
         to be synthesized, given the dialogue history and the script (transcription) of that next utterance.
 
         The style description should reflect how the speech should sound -- covering aspects like emotion,
         speaking rate, vocal quality, and energy level -- and should be consistent with the speaker's
-        established style and the conversational flow. Be concise: 1-3 sentences is ideal.
+        established style, and be appropriate to the conversational flow. Be concise: 1-3 sentences is ideal.
 
         Each turn shows the speaker, their transcription, and the style used for that turn.
         For the final turn, the style is marked as "???" -- that is what you must predict.
@@ -114,6 +128,54 @@ def build_user_prompt(query_chain: list) -> str:
         f"{dialogue_block}\n\n"
         "Predicted style for the final turn:"
     )
+
+
+# wandb helpers
+
+def wandb_init():
+    if not USE_WANDB:
+        return None
+    try:
+        import wandb
+    except ImportError:
+        print("wandb not installed -- skipping W&B tracking.")
+        return None
+    api_key = os.environ.get("WANDB_API_KEY")
+    if not api_key:
+        print("WANDB_API_KEY not set -- skipping W&B tracking.")
+        return None
+    wandb.login(key=api_key, relogin=False)
+    try:
+        run = wandb.init(
+            project=WANDB_PROJECT,
+            entity=WANDB_ENTITY,
+            name=WANDB_RUN_NAME,
+            config={
+                "model":            TINYLLAMA_REPO,
+                "num_turns":        NUM_TURNS,
+                "num_few_shot":     NUM_FEW_SHOT,
+                "num_eval_samples": NUM_EVAL_SAMPLES,
+                "max_new_tokens":   MAX_NEW_TOKENS,
+                "random_seed":      RANDOM_SEED,
+            },
+        )
+        print(f"W&B run: {run.url}")
+        return run
+    except Exception as e:
+        print(f"W&B init failed ({e}) -- continuing without tracking.")
+        return None
+
+
+def wandb_log(metrics: dict, run):
+    if run is not None:
+        run.log(metrics)
+
+
+def wandb_finish(run):
+    if run is not None:
+        run.finish()
+
+
 
 
 def load_tinyllama(device: str):
@@ -167,38 +229,58 @@ def main():
     ds = load_dataset(NUM_TURNS)
     print(f"  {len(ds)} chains available")
 
-    # sample NUM_FEW_SHOT + 1 distinct indices: first 3 are examples, last is the query
-    sampled_indices = random.sample(range(len(ds)), NUM_FEW_SHOT + 1)
-    few_shot_indices = sampled_indices[:NUM_FEW_SHOT]
-    query_index      = sampled_indices[-1]
+    # Reserve NUM_FEW_SHOT indices as fixed in-context examples;
+    # sample NUM_EVAL_SAMPLES distinct query indices from the remainder.
+    all_indices = list(range(len(ds)))
+    few_shot_indices = random.sample(all_indices, NUM_FEW_SHOT)
+    remaining = [i for i in all_indices if i not in set(few_shot_indices)]
+    query_indices = random.sample(remaining, min(NUM_EVAL_SAMPLES, len(remaining)))
 
     few_shot_chains = [ds[i] for i in few_shot_indices]
-    query_chain     = ds[query_index]
-
-    system_prompt = build_system_prompt(few_shot_chains)
-    user_prompt   = build_user_prompt(query_chain)
+    system_prompt   = build_system_prompt(few_shot_chains)
 
     print("\n" + "="*60)
     print("SYSTEM PROMPT")
     print("="*60)
     print(system_prompt)
 
-    print("\n" + "="*60)
-    print("USER PROMPT (query chain)")
-    print("="*60)
-    print(user_prompt)
-
-    print("\n" + "="*60)
-    print(f"Loading TinyLlama on {device}...")
-    print("="*60)
+    print(f"\n{len(query_indices)} query chains sampled for evaluation.")
+    print(f"\nLoading TinyLlama on {device}...")
     tokenizer, model = load_tinyllama(device)
 
-    prediction = query_tinyllama(tokenizer, model, system_prompt, user_prompt, device)
+    wandb_run = wandb_init()
 
-    ground_truth = query_chain[-1].get("text_description", "N/A").strip()
+    all_preds, all_refs = [], []
 
-    print(f"\nPredicted style : {prediction}")
-    print(f"Ground truth    : {ground_truth}")
+    for idx, qi in enumerate(query_indices):
+        query_chain  = ds[qi]
+        user_prompt  = build_user_prompt(query_chain)
+        prediction   = query_tinyllama(tokenizer, model, system_prompt, user_prompt, device)
+        ground_truth = query_chain[-1].get("text_description", "").strip()
+
+        all_preds.append(prediction)
+        all_refs.append(ground_truth)
+
+        print(f"\n[{idx+1}/{len(query_indices)}]")
+        print(f"  Predicted : {prediction}")
+        print(f"  Reference : {ground_truth}")
+
+    # Compute and report evaluation metrics
+    print("\n" + "="*60)
+    print("EVALUATION METRICS")
+    print("="*60)
+
+    bs_metrics  = compute_bertscore(all_preds, all_refs, device=device)
+    met_metrics = compute_meteor(all_preds, all_refs)
+
+    print(f"BERTScore F1  : {bs_metrics['bertscore_f1_mean']:.4f} (±{bs_metrics['bertscore_f1_std']:.4f})")
+    print(f"BERTScore P   : {bs_metrics['bertscore_precision_mean']:.4f} (±{bs_metrics['bertscore_precision_std']:.4f})")
+    print(f"BERTScore R   : {bs_metrics['bertscore_recall_mean']:.4f} (±{bs_metrics['bertscore_recall_std']:.4f})")
+    print(f"METEOR        : {met_metrics['meteor_mean']:.4f} (±{met_metrics['meteor_std']:.4f})")
+
+    wandb_log({**bs_metrics, **met_metrics}, wandb_run)
+    wandb_finish(wandb_run)
+
 
 
 if __name__ == "__main__":
