@@ -7,11 +7,9 @@ then predicts the style for a query chain's final utterance.
 import os
 import random
 import textwrap
+import argparse
 
-import nltk
-from nltk.translate.meteor_score import meteor_score as _meteor
-from bert_score import score as _bert_score
-import numpy as np
+
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
@@ -21,15 +19,7 @@ from train_helpers import compute_bertscore, compute_meteor
 
 # same repo used by StylePromptGenerator -- keep these in sync
 TINYLLAMA_REPO = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
-MAX_NEW_TOKENS = 80
 
-H5_PATH   = "../data_TEMP/merged_audio_full.h5"
-META_PATH = "../data_TEMP/merged_metadata_full.parquet"
-
-NUM_TURNS      = 5   # chain length
-NUM_FEW_SHOT   = 3   # examples in the system prompt
-NUM_EVAL_SAMPLES = 50  # how many query chains to evaluate
-RANDOM_SEED    = 42
 
 # W&B config -- set USE_WANDB=False or unset WANDB_API_KEY to disable
 USE_WANDB      = True
@@ -38,13 +28,13 @@ WANDB_ENTITY   = "jdm8943-rochester-institute-of-technology"
 WANDB_RUN_NAME = "baseline-tinyllama-fewshot"
 
 
-def load_dataset(num_turns: int) -> ConvoStyleDataset:
+def load_dataset(h5_path: str, meta_path: str, num_turns: int, max_len_sec: int) -> ConvoStyleDataset:
     return ConvoStyleDataset(
-        h5_path=H5_PATH,
-        meta_path=META_PATH,
-        # audio not needed here -- we only use text fields
+        h5_path=h5_path,
+        meta_path=meta_path,
         meta_columns=["transcription", "text_description", "speakerid"],
         num_turns=num_turns,
+        max_len_sec=max_len_sec,
     )
 
 
@@ -132,7 +122,7 @@ def build_user_prompt(query_chain: list) -> str:
 
 # wandb helpers
 
-def wandb_init():
+def wandb_init(cfg: dict):
     if not USE_WANDB:
         return None
     try:
@@ -150,14 +140,7 @@ def wandb_init():
             project=WANDB_PROJECT,
             entity=WANDB_ENTITY,
             name=WANDB_RUN_NAME,
-            config={
-                "model":            TINYLLAMA_REPO,
-                "num_turns":        NUM_TURNS,
-                "num_few_shot":     NUM_FEW_SHOT,
-                "num_eval_samples": NUM_EVAL_SAMPLES,
-                "max_new_tokens":   MAX_NEW_TOKENS,
-                "random_seed":      RANDOM_SEED,
-            },
+            config=cfg,
         )
         print(f"W&B run: {run.url}")
         return run
@@ -221,20 +204,27 @@ def query_tinyllama(
     return tokenizer.decode(generated, skip_special_tokens=True).strip()
 
 
-def main():
-    random.seed(RANDOM_SEED)
+def main(
+    h5_path: str,
+    meta_path: str,
+    num_turns: int = 5,
+    num_few_shot: int = 3,
+    num_eval_samples: int = 50,
+    max_new_tokens: int = 80,
+    max_len_sec: int = 15,
+    seed: int = 42,
+):
+    random.seed(seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     print("Loading dataset...")
-    ds = load_dataset(NUM_TURNS)
+    ds = load_dataset(h5_path, meta_path, num_turns, max_len_sec)
     print(f"  {len(ds)} chains available")
 
-    # Reserve NUM_FEW_SHOT indices as fixed in-context examples;
-    # sample NUM_EVAL_SAMPLES distinct query indices from the remainder.
-    all_indices = list(range(len(ds)))
-    few_shot_indices = random.sample(all_indices, NUM_FEW_SHOT)
-    remaining = [i for i in all_indices if i not in set(few_shot_indices)]
-    query_indices = random.sample(remaining, min(NUM_EVAL_SAMPLES, len(remaining)))
+    all_indices      = list(range(len(ds)))
+    few_shot_indices = random.sample(all_indices, num_few_shot)
+    remaining        = [i for i in all_indices if i not in set(few_shot_indices)]
+    query_indices    = random.sample(remaining, min(num_eval_samples, len(remaining)))
 
     few_shot_chains = [ds[i] for i in few_shot_indices]
     system_prompt   = build_system_prompt(few_shot_chains)
@@ -248,14 +238,22 @@ def main():
     print(f"\nLoading TinyLlama on {device}...")
     tokenizer, model = load_tinyllama(device)
 
-    wandb_run = wandb_init()
+    wandb_run = wandb_init({
+        "model":            TINYLLAMA_REPO,
+        "num_turns":        num_turns,
+        "num_few_shot":     num_few_shot,
+        "num_eval_samples": num_eval_samples,
+        "max_new_tokens":   max_new_tokens,
+        "max_len_sec":      max_len_sec,
+        "seed":             seed,
+    })
 
     all_preds, all_refs = [], []
 
     for idx, qi in enumerate(query_indices):
         query_chain  = ds[qi]
         user_prompt  = build_user_prompt(query_chain)
-        prediction   = query_tinyllama(tokenizer, model, system_prompt, user_prompt, device)
+        prediction   = query_tinyllama(tokenizer, model, system_prompt, user_prompt, device, max_new_tokens)
         ground_truth = query_chain[-1].get("text_description", "").strip()
 
         all_preds.append(prediction)
@@ -265,7 +263,6 @@ def main():
         print(f"  Predicted : {prediction}")
         print(f"  Reference : {ground_truth}")
 
-    # Compute and report evaluation metrics
     print("\n" + "="*60)
     print("EVALUATION METRICS")
     print("="*60)
@@ -281,7 +278,22 @@ def main():
     wandb_log({**bs_metrics, **met_metrics}, wandb_run)
     wandb_finish(wandb_run)
 
+    return {**bs_metrics, **met_metrics}
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description="Few-shot TinyLlama baseline for style prompt prediction.")
+    p.add_argument("--h5_path",          required=True,              help="Path to merged_audio.h5")
+    p.add_argument("--meta_path",        required=True,              help="Path to merged_metadata.parquet")
+    p.add_argument("--num_turns",        type=int,   default=5,      help="Conversation chain length (default: 5)")
+    p.add_argument("--num_few_shot",     type=int,   default=3,      help="Number of in-context examples (default: 3)")
+    p.add_argument("--num_eval_samples", type=int,   default=50,     help="Number of query chains to evaluate (default: 50)")
+    p.add_argument("--max_new_tokens",   type=int,   default=80,     help="Max tokens to generate per prediction (default: 80)")
+    p.add_argument("--max_len_sec",      type=int,   default=15,     help="Max audio length in seconds (default: 15)")
+    p.add_argument("--seed",             type=int,   default=42,     help="Random seed (default: 42)")
+    return p.parse_args()
 
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    main(**vars(args))
