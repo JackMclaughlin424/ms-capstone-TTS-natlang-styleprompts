@@ -7,6 +7,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from DialogueEncoder import SCFA, DialoguePooler
 
 
+# not really used, these are controlled via config parameters now
 LLM_REPO = "meta-llama/Llama-3.2-3B-Instruct"  # or whichever you choose
 LLM_DIM  = 3072  # must match model's hidden_size
 
@@ -60,7 +61,7 @@ class StylePromptHead(nn.Module):
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=llm_dim,
             nhead=nhead,
-            dim_feedforward=llm_dim * 4,
+            dim_feedforward=llm_dim * 2,
             dropout=dropout,
             batch_first=True,
         )
