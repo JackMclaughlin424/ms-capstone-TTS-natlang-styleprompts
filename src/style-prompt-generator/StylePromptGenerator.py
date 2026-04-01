@@ -14,7 +14,7 @@ LLM_DIM  = 3072  # must match model's hidden_size
 
 def load_tinyllama(device: str = "cpu", torch_dtype=torch.float32):
     tokenizer = AutoTokenizer.from_pretrained(LLM_REPO)
-    model = AutoModelForCausalLM.from_pretrained(LLM_REPO, torch_dtype=torch_dtype)
+    model = AutoModelForCausalLM.from_pretrained(LLM_REPO, dtype=torch_dtype)
     model = model.to(device)
     model.eval()
     if tokenizer.pad_token is None:

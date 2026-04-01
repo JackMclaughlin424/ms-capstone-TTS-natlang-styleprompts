@@ -287,7 +287,7 @@ def build_model(cfg: Dict[str, Any], device: torch.device, log) -> SCFAWithStyle
     ).to(device)
 
     tokenizer_llm = AutoTokenizer.from_pretrained(cfg["llm_repo"])
-    llm = AutoModelForCausalLM.from_pretrained(cfg["llm_repo"], torch_dtype=torch.bfloat16).to(device)
+    llm = AutoModelForCausalLM.from_pretrained(cfg["llm_repo"], dtype=torch.bfloat16).to(device)
     if tokenizer_llm.pad_token is None:
         tokenizer_llm.pad_token = tokenizer_llm.eos_token
 
