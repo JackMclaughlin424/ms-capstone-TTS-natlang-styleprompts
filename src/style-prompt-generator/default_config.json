@@ -19,7 +19,7 @@
     "dialogue_pooler": "last",
     "_comment_param_section_llm_peft": "the following parameters pertain to the peft of the llm",
     "num_prefix_tokens": 40,
-    "num_mapping_layers": 8,
+    "num_mapping_layers": 4,
     "mapping_nhead": 8,
     "system_prompt": "",
     "max_prompt_tokens": 128,

@@ -61,7 +61,7 @@ class StylePromptHead(nn.Module):
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=TINYLLAMA_DIM,
             nhead=nhead,
-            dim_feedforward=TINYLLAMA_DIM * 4,
+            dim_feedforward=TINYLLAMA_DIM*4,
             dropout=dropout,
             batch_first=True,
         )

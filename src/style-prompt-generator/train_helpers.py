@@ -198,10 +198,14 @@ def _unfreeze_top_n_layers(model: nn.Module, layer_attr: str, n: int, log):
     if n <= 0:
         return
 
-    layers = getattr(model, layer_attr, None)
-    if layers is None:
-        log.warning(f"Could not find attribute '{layer_attr}' on {type(model).__name__} -- skipping unfreeze")
-        return
+    obj = model
+    for part in layer_attr.split("."):
+        obj = getattr(obj, part, None)
+        if obj is None:
+            log.warning(f"Could not find attribute '{layer_attr}' on {type(model).__name__} -- skipping unfreeze")
+            return
+    layers = obj
+
 
     # unfreeze from the top (last layers first, which are most task-relevant)
     for layer in layers[-n:]:
