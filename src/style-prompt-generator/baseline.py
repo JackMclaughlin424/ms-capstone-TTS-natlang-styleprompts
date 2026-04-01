@@ -18,7 +18,9 @@ from ConvoStyleDataset import ConvoStyleDataset
 from train_helpers import compute_bertscore, compute_meteor
 
 # same repo used by StylePromptGenerator -- keep these in sync
-TINYLLAMA_REPO = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+LLM_REPO = "meta-llama/Llama-3.2-3B-Instruct"  # or whichever you choose
+LLM_DIM  = 3072  # must match model's hidden_size
+
 
 
 # W&B config -- set USE_WANDB=False or unset WANDB_API_KEY to disable
@@ -147,8 +149,8 @@ def wandb_finish(run):
 
 
 def load_tinyllama(device: str):
-    tokenizer = AutoTokenizer.from_pretrained(TINYLLAMA_REPO)
-    model = AutoModelForCausalLM.from_pretrained(TINYLLAMA_REPO, torch_dtype=torch.float32)
+    tokenizer = AutoTokenizer.from_pretrained(LLM_REPO)
+    model = AutoModelForCausalLM.from_pretrained(LLM_REPO, torch_dtype=torch.float32)
     model = model.to(device).eval()
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -213,7 +215,7 @@ def main(
     tokenizer, model = load_tinyllama(device)
 
     wandb_run = wandb_init({
-        "model":            TINYLLAMA_REPO,
+        "model":            LLM_REPO,
         "num_turns":        num_turns,
         "num_few_shot":     num_few_shot,
         "num_eval_samples": num_eval_samples,

@@ -37,8 +37,8 @@ from StylePromptGenerator import (
     StylePromptHead,
     StylePromptGenerator,
     SCFAWithStyleHead,
-    TINYLLAMA_REPO,
-    TINYLLAMA_DIM,
+    LLM_REPO,
+    LLM_DIM,
 )
 
 # defaults
@@ -59,6 +59,8 @@ DEFAULTS: Dict[str, Any] = {
     "nhead":                 8,           # must divide d_model AND d_model//3
 
     # prefix / LLM
+    "llm_repo":              LLM_REPO,
+    "llm_dim":               LLM_DIM,
     "num_prefix_tokens":     40,          # K in StyleCap notation
     "num_mapping_layers":    8,
     "mapping_nhead":         8,
@@ -275,19 +277,21 @@ def build_model(cfg: Dict[str, Any], device: torch.device, log) -> SCFAWithStyle
         mode=cfg["dialogue_pooler"],
     ).to(device)
 
-    # TinyLlama embedding dim is fixed at TINYLLAMA_DIM (2048)
+    # LLM embedding dim is fixed at LLM_DIM
     head = StylePromptHead(
         d_model=cfg["d_model"],
         num_prefix_tokens=cfg["num_prefix_tokens"],
+        llm_dim=cfg["llm_dim"],
         num_mapping_layers=cfg["num_mapping_layers"],
         nhead=cfg["mapping_nhead"],
         dropout=cfg["dropout"],
     ).to(device)
 
-    tokenizer_llm = AutoTokenizer.from_pretrained(TINYLLAMA_REPO)
-    llm = AutoModelForCausalLM.from_pretrained(TINYLLAMA_REPO).to(device)
+    tokenizer_llm = AutoTokenizer.from_pretrained(cfg["llm_repo"])
+    llm = AutoModelForCausalLM.from_pretrained(cfg["llm_repo"]).to(device)
     if tokenizer_llm.pad_token is None:
         tokenizer_llm.pad_token = tokenizer_llm.eos_token
+
 
     generator = StylePromptGenerator(
         style_head=head,

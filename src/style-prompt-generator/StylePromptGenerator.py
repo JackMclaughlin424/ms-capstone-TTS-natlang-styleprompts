@@ -7,13 +7,13 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from DialogueEncoder import SCFA, DialoguePooler
 
 
-TINYLLAMA_REPO = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
-TINYLLAMA_DIM  = 2048  # word embedding dim -- prefix vectors must match this
+LLM_REPO = "meta-llama/Llama-3.2-3B-Instruct"  # or whichever you choose
+LLM_DIM  = 3072  # must match model's hidden_size
 
 
 def load_tinyllama(device: str = "cpu", torch_dtype=torch.float32):
-    tokenizer = AutoTokenizer.from_pretrained(TINYLLAMA_REPO)
-    model = AutoModelForCausalLM.from_pretrained(TINYLLAMA_REPO, torch_dtype=torch_dtype)
+    tokenizer = AutoTokenizer.from_pretrained(LLM_REPO)
+    model = AutoModelForCausalLM.from_pretrained(LLM_REPO, torch_dtype=torch_dtype)
     model = model.to(device)
     model.eval()
     if tokenizer.pad_token is None:
@@ -37,6 +37,7 @@ class StylePromptHead(nn.Module):
         self,
         d_model:            int,
         num_prefix_tokens:  int,
+        llm_dim:            int   = LLM_DIM,
         num_mapping_layers: int   = 8,
         nhead:              int   = 8,
         dropout:            float = 0.1,
@@ -45,27 +46,26 @@ class StylePromptHead(nn.Module):
 
         self.num_prefix_tokens = num_prefix_tokens
 
-        # compress each of the 4 SCFA streams independently before merging
         self.stream_compressors = nn.ModuleList([
             nn.Linear(d_model, d_model // 2) for _ in range(4)
         ])
         self.fusion = nn.Sequential(
-            nn.Linear(d_model * 2, TINYLLAMA_DIM),  # 4 * (d_model // 2) = 2 * d_model
+            nn.Linear(d_model * 2, llm_dim),
             nn.Tanh(),
             nn.Dropout(dropout),
         )
-        self.norm = nn.LayerNorm(TINYLLAMA_DIM)
+        self.norm = nn.LayerNorm(llm_dim)
 
-        # K learnable constants are the queries; z is the memory they attend to
-        self.prefix_const = nn.Parameter(torch.randn(num_prefix_tokens, TINYLLAMA_DIM) * 0.02) # scale this to constrain initialization
+        self.prefix_const = nn.Parameter(torch.randn(num_prefix_tokens, llm_dim) * 0.02)
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=TINYLLAMA_DIM,
+            d_model=llm_dim,
             nhead=nhead,
-            dim_feedforward=TINYLLAMA_DIM*4,
+            dim_feedforward=llm_dim * 4,
             dropout=dropout,
             batch_first=True,
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_mapping_layers)
+
 
     def forward(self, dialogue_vec: torch.Tensor) -> torch.Tensor:
         # dialogue_vec: (B, 4 * d_model) -- already pooled by DialoguePooler
@@ -75,12 +75,12 @@ class StylePromptHead(nn.Module):
         # split back into the 4 SCFA streams and compress each independently
         streams    = dialogue_vec.split(d_model, dim=-1)
         compressed = [F.relu(comp(s)) for comp, s in zip(self.stream_compressors, streams)]
-        z = self.norm(self.fusion(torch.cat(compressed, dim=-1)))  # (B, TINYLLAMA_DIM)
+        z = self.norm(self.fusion(torch.cat(compressed, dim=-1)))  # (B, LLM_DIM)
 
         # z sits at position 0; learnable constants learn to query it
-        consts = self.prefix_const.unsqueeze(0).expand(B, -1, -1)  # (B, K, TINYLLAMA_DIM)
-        seq    = torch.cat([z.unsqueeze(1), consts], dim=1)         # (B, 1+K, TINYLLAMA_DIM)
-        out    = self.transformer(seq)                               # (B, 1+K, TINYLLAMA_DIM)
+        consts = self.prefix_const.unsqueeze(0).expand(B, -1, -1)  # (B, K, LLM_DIM)
+        seq    = torch.cat([z.unsqueeze(1), consts], dim=1)         # (B, 1+K, LLM_DIM)
+        out    = self.transformer(seq)                               # (B, 1+K, LLM_DIM)
 
         return out[:, 1:, :]  # drop z position, return K prefix vectors
 
@@ -118,7 +118,7 @@ class StylePromptGenerator(nn.Module):
         )
         input_ids = tokens.input_ids.to(device)
         attn_mask = tokens.attention_mask.to(device)
-        embeds    = self.llm.get_input_embeddings()(input_ids)  # (B, L, TINYLLAMA_DIM)
+        embeds    = self.llm.get_input_embeddings()(input_ids)  # (B, L, LLM_DIM)
         return embeds, attn_mask
 
     @torch.no_grad()
@@ -127,7 +127,7 @@ class StylePromptGenerator(nn.Module):
         B      = dialogue_vec.shape[0]
         device = dialogue_vec.device
 
-        prefix_embeds = self.style_head(dialogue_vec)  # (B, K, TINYLLAMA_DIM)
+        prefix_embeds = self.style_head(dialogue_vec)  # (B, K, LLM_DIM)
         K             = prefix_embeds.shape[1]
         prefix_mask   = torch.ones(B, K, dtype=torch.long, device=device)
 
