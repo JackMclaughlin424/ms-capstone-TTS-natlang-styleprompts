@@ -39,52 +39,34 @@ def load_dataset(h5_path: str, meta_path: str, num_turns: int, max_len_sec: int)
 
 
 def chain_to_text(chain: list, include_last_style: bool = True) -> str:
-    """
-    Render a chain as a readable dialogue block.
-    The last turn is the "current script" -- its style is what we want to predict,
-    so we only include its transcription, not its style.
-    """
     lines = []
     for i, utt in enumerate(chain):
         speaker = utt.get("speakerid", f"Speaker{i}")
         text    = utt.get("transcription", "").strip()
-        style   = utt.get("text_description", "").strip()
         is_last = i == len(chain) - 1
 
+        lines.append(f"[Turn {i+1}] {speaker}: \"{text}\"")
         if is_last:
-            # this is the turn we're predicting -- no style label
-            lines.append(f"[Turn {i+1}] {speaker}: \"{text}\"")
             lines.append(f"  -> Style: ???")
-        else:
-            style_str = style if style else "unknown"
-            lines.append(f"[Turn {i+1}] {speaker}: \"{text}\"")
-            lines.append(f"  -> Style: {style_str}")
 
     return "\n".join(lines)
+
 
 
 def build_few_shot_example(chain: list) -> str:
-    """
-    Renders one complete example (all turns including the last turn's style)
-    for use inside the system prompt.
-    """
     lines = []
     for i, utt in enumerate(chain):
         speaker = utt.get("speakerid", f"Speaker{i}")
         text    = utt.get("transcription", "").strip()
-        style   = utt.get("text_description", "").strip()
         is_last = i == len(chain) - 1
 
-        style_str = style if style else "unknown"
         lines.append(f"[Turn {i+1}] {speaker}: \"{text}\"")
-
         if is_last:
-            # the answer we want the model to reproduce in real queries
-            lines.append(f"  -> Style: {style_str}")
-        else:
-            lines.append(f"  -> Style: {style_str}")
+            style = (utt.get("text_description") or "unknown").strip()
+            lines.append(f"  -> Style: {style}")
 
     return "\n".join(lines)
+
 
 
 def build_system_prompt(few_shot_chains: list[list]) -> str:
@@ -97,10 +79,11 @@ def build_system_prompt(few_shot_chains: list[list]) -> str:
         speaking rate, vocal quality, and energy level -- and should be consistent with the speaker's
         established style, and be appropriate to the conversational flow. Be concise: 1-3 sentences is ideal.
 
-        Each turn shows the speaker, their transcription, and the style used for that turn.
-        For the final turn, the style is marked as "???" -- that is what you must predict.
+        Each turn shows the speaker and their transcription.
+        For the final turn, predict the style and output it as "Style: <your prediction>".
         Respond with only the style description for the final turn, nothing else.
     """)
+
 
     examples_block = "\n\n---\n\n".join(
         f"Example {i+1}:\n{build_few_shot_example(chain)}"
@@ -176,6 +159,7 @@ def query_tinyllama(
     system_prompt: str,
     user_prompt: str,
     device: str,
+    max_new_tokens
 ) -> str:
     # apply_chat_template handles the [INST] / <<SYS>> formatting for us
     messages = [
@@ -193,7 +177,7 @@ def query_tinyllama(
     with torch.no_grad():
         output_ids = model.generate(
             **inputs,
-            max_new_tokens=MAX_NEW_TOKENS,
+            max_new_tokens=max_new_tokens,
             do_sample=False,
             pad_token_id=tokenizer.pad_token_id,
             eos_token_id=tokenizer.eos_token_id,
@@ -221,7 +205,12 @@ def main(
     ds = load_dataset(h5_path, meta_path, num_turns, max_len_sec)
     print(f"  {len(ds)} chains available")
 
-    all_indices      = list(range(len(ds)))
+    # filter out text-only rows w/ no text_description
+    all_indices = [
+        i for i in range(len(ds))
+        if all(utt.get("text_description") is not None for utt in ds[i])
+    ]
+
     few_shot_indices = random.sample(all_indices, num_few_shot)
     remaining        = [i for i in all_indices if i not in set(few_shot_indices)]
     query_indices    = random.sample(remaining, min(num_eval_samples, len(remaining)))
