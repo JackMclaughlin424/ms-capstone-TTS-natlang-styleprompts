@@ -57,7 +57,7 @@ class StylePromptHead(nn.Module):
         self.norm = nn.LayerNorm(TINYLLAMA_DIM)
 
         # K learnable constants are the queries; z is the memory they attend to
-        self.prefix_const = nn.Parameter(torch.randn(num_prefix_tokens, TINYLLAMA_DIM))
+        self.prefix_const = nn.Parameter(torch.randn(num_prefix_tokens, TINYLLAMA_DIM) * 0.02) # scale this to constrain initialization
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=TINYLLAMA_DIM,
             nhead=nhead,

@@ -73,12 +73,10 @@ class TurnPositionEncoding(nn.Module):
 
 class DualModalityEmbedder(nn.Module):
 
-    def __init__(self, text_encoder_model_pretrained, audio_encoder_model_pretrained
-                 , tokenizer, processor
-                 , SAMPLE_RATE):
+    def __init__(self, text_encoder_model_pretrained, audio_encoder_model_pretrained,
+                 tokenizer, processor, SAMPLE_RATE):
         super().__init__()
 
-        
         text_encoder  = ModalityEncoder(text_encoder_model_pretrained,  SelfAttentivePooling(768))
         audio_encoder = ModalityEncoder(audio_encoder_model_pretrained, SelfAttentivePooling(768))
 
@@ -86,7 +84,12 @@ class DualModalityEmbedder(nn.Module):
         self.audio_encoder = audio_encoder
         self.tokenizer     = tokenizer
         self.processor     = processor
-        self.SAMPLE_RATE = SAMPLE_RATE
+        self.SAMPLE_RATE   = SAMPLE_RATE
+
+        # learned per-layer weights for WavLM SSL feature aggregation (StyleCap sec 3.2)
+        # WavLM-base-plus has 1 CNN embedding layer + 12 transformer layers = 13 total
+        num_wavlm_layers = 13
+        self.wavlm_layer_weights = nn.Parameter(torch.zeros(num_wavlm_layers))
 
     def embed_text(self, texts):
         # texts is list[B][T] -- flatten to a single batch so the encoder sees B*T items
@@ -133,7 +136,13 @@ class DualModalityEmbedder(nn.Module):
             inputs = {k: v.to(device) for k, v in inputs.items()}  
 
             with torch.no_grad():
-                hidden = self.audio_encoder.backbone(**inputs).last_hidden_state
+                wavlm_out = self.audio_encoder.backbone(**inputs, output_hidden_states=True)
+
+            # weighted sum over all WavLM layers (eq. from StyleCap)
+            # hidden_states: tuple of (num_layers, B, T, 768)
+            hidden_states = torch.stack(wavlm_out.hidden_states, dim=0)  # (13, B, T, 768)
+            layer_weights = F.softmax(self.wavlm_layer_weights, dim=0)   # (13,)
+            hidden = (layer_weights[:, None, None, None] * hidden_states).sum(dim=0)  # (B, T, 768)
 
             T_out    = hidden.shape[1]
             raw_mask = (torch.arange(audio_t.shape[1], device = device).unsqueeze(0)
