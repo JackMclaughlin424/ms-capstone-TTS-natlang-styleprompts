@@ -96,11 +96,13 @@ def build_system_prompt(few_shot_chains: list[list]) -> str:
 def build_user_prompt(query_chain: list) -> str:
     dialogue_block = chain_to_text(query_chain, include_last_style=False)
     return (
-        "Given the dialogue history, the styles used in each turn, and the current script "
-        "(the final turn marked ???), predict an appropriate style for the speech to be synthesized.\n\n"
-        f"{dialogue_block}\n\n"
-        "Predicted style for the final turn:"
+        "Given the dialogue history and the script for the final turn, "
+        "predict the style description.\n\n"
+        f"{dialogue_block}\n"
+        "  -> Style:"  # exact match to few-shot example format; model completes here
     )
+
+
 
 
 # wandb helpers
@@ -153,27 +155,12 @@ def load_tinyllama(device: str):
     return tokenizer, model
 
 
-def query_tinyllama(
-    tokenizer: AutoTokenizer,
-    model: AutoModelForCausalLM,
-    system_prompt: str,
-    user_prompt: str,
-    device: str,
-    max_new_tokens
-) -> str:
-    # apply_chat_template handles the [INST] / <<SYS>> formatting for us
-    messages = [
-        {"role": "system",    "content": system_prompt},
-        {"role": "user",      "content": user_prompt},
-    ]
-    prompt = tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True,  # appends the assistant turn opener
-    )
+def query_tinyllama(tokenizer, model, system_prompt, user_prompt, device, max_new_tokens) -> str:
+    # Raw completion format — lets few-shot examples condition the pattern directly
+    # rather than the chat template overriding with instruction-following behavior
+    full_prompt = f"{system_prompt}\n\n---\n\n{user_prompt}"
 
-    inputs = tokenizer(prompt, return_tensors="pt").to(device)
-
+    inputs = tokenizer(full_prompt, return_tensors="pt").to(device)
     with torch.no_grad():
         output_ids = model.generate(
             **inputs,
@@ -183,9 +170,9 @@ def query_tinyllama(
             eos_token_id=tokenizer.eos_token_id,
         )
 
-    # slice off the input tokens so we only decode the generated part
     generated = output_ids[0, inputs["input_ids"].shape[1]:]
     return tokenizer.decode(generated, skip_special_tokens=True).strip()
+
 
 
 def main(
