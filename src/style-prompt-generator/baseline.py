@@ -8,7 +8,7 @@ import os
 import random
 import textwrap
 import argparse
-
+import numpy as np
 
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -194,8 +194,12 @@ def main(
 
     # filter out text-only rows w/ no text_description
     all_indices = [
-        i for i in range(len(ds))
-        if all(utt.get("text_description") is not None for utt in ds[i])
+        i for i, chain in enumerate(ds._chains)
+        if all(
+            chain_row.get("text_description") not in (None, "")
+            and not (isinstance(chain_row.get("text_description"), float) and np.isnan(chain_row.get("text_description")))
+            for chain_row in chain
+        )
     ]
 
     few_shot_indices = random.sample(all_indices, num_few_shot)
