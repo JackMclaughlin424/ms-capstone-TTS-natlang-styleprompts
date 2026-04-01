@@ -202,19 +202,10 @@ def main(
         )
     ]
 
-    few_shot_indices = random.sample(all_indices, num_few_shot)
-    remaining        = [i for i in all_indices if i not in set(few_shot_indices)]
-    query_indices    = random.sample(remaining, min(num_eval_samples, len(remaining)))
-
-    few_shot_chains = [ds[i] for i in few_shot_indices]
-    system_prompt   = build_system_prompt(few_shot_chains)
-
-    print("\n" + "="*60)
-    print("SYSTEM PROMPT")
-    print("="*60)
-    print(system_prompt)
+    query_indices = random.sample(all_indices, min(num_eval_samples, len(all_indices)))
 
     print(f"\n{len(query_indices)} query chains sampled for evaluation.")
+
     print(f"\nLoading TinyLlama on {device}...")
     tokenizer, model = load_tinyllama(device)
 
@@ -231,9 +222,14 @@ def main(
     all_preds, all_refs = [], []
 
     for idx, qi in enumerate(query_indices):
+        few_shot_pool   = [i for i in all_indices if i != qi]
+        few_shot_chains = [ds[i] for i in random.sample(few_shot_pool, num_few_shot)]
+        system_prompt   = build_system_prompt(few_shot_chains)
+
         query_chain  = ds[qi]
         user_prompt  = build_user_prompt(query_chain)
         prediction   = query_tinyllama(tokenizer, model, system_prompt, user_prompt, device, max_new_tokens)
+
         ground_truth = query_chain[-1].get("text_description", "").strip()
 
         all_preds.append(prediction)
