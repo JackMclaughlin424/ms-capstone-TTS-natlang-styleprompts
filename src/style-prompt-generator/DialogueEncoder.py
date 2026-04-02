@@ -336,8 +336,12 @@ class ContextAwareTransformer(nn.Module):
 
     def forward(self, turn_embeddings: torch.Tensor):
         seq_len = turn_embeddings.shape[1]
-        output = self.transformer_encoder(turn_embeddings, is_causal=True)
+        causal_mask = nn.Transformer.generate_square_subsequent_mask(
+            seq_len, device=turn_embeddings.device, dtype=turn_embeddings.dtype
+        )
+        output = self.transformer_encoder(turn_embeddings, mask=causal_mask, is_causal=True)
         return output
+
 
 
 
