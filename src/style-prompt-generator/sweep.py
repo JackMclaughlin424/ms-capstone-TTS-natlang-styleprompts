@@ -49,8 +49,7 @@ SWEEP_CONFIG = {
             "min": 1e-5,
             "max": 1e-3,
         },
-        "batch_size":         {"values": [8, 16, 32]},
-        "dropout":            {"values": [0.1, 0.2, 0.3]},
+        "batch_size":         {"values": [16, 32]},
         "num_prefix_tokens":  {"values": [10, 20, 40]},
         "warmup_ratio":       {"values": [0.05, 0.1, 0.2]},
         "weight_decay": {
@@ -60,8 +59,7 @@ SWEEP_CONFIG = {
         },
         "num_mapping_layers": {"values": [4, 8]},
         "dialogue_pooler":    {"values": ["attentive", "last"]},
-        "num_unfrozen_bert":    {"values": [0,1,2]},
-        "num_unfrozen_wavlm":    {"values": [0,1,2]},
+        "num_turns":    {"values": [0,1,3,5]},
     },
 }
 
