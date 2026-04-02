@@ -186,23 +186,22 @@ def _train_fold(
 def _make_sweep_fn(base_cfg: dict, n_folds: int, all_conv_ids: np.ndarray):
     """Return the callable that W&B's agent invokes for each hyperparameter trial."""
 
+    # Precompute folds once so every trial sees the same data curriculum.
+    rng = np.random.default_rng(base_cfg["seed"])
+    shuffled = all_conv_ids.copy()
+    rng.shuffle(shuffled)
+    folds = np.array_split(shuffled, n_folds)
+
     def sweep_fn():
-        run = wandb.init()          # agent has already set wandb.config
+        run = wandb.init()
         cfg = deepcopy(base_cfg)
 
-        # apply sampled hyperparameters on top of the base config
         for key, val in run.config.items():
             if key in cfg:
                 cfg[key] = val
         run.config.update({"n_folds": n_folds}, allow_val_change=True)
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        # shuffle conv_ids with a fixed seed so every trial uses identical folds
-        rng = np.random.default_rng(cfg["seed"])
-        shuffled = all_conv_ids.copy()
-        rng.shuffle(shuffled)
-        folds = np.array_split(shuffled, n_folds)
 
         fold_metrics = []
         for fold_idx in range(n_folds):
