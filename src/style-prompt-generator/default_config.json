@@ -44,5 +44,6 @@
     "early_stopping_min_delta": 1e-4,
     "seed": 42,
     "num_workers": 4,
-    "log_every_n_steps": 100
+    "log_every_n_steps": 100,
+    "compile": false
 }

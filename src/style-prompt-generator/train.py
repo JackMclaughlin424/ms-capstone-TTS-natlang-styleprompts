@@ -255,8 +255,9 @@ def train(cfg: Dict[str, Any], resume=True):
     model = build_model(cfg, device, log)
 
     # compile model for faster training
-    model.scfa = torch.compile(model.scfa)
-    model.style_generator.style_head = torch.compile(model.style_generator.style_head)
+    if cfg["compile"]:
+        model.scfa = torch.compile(model.scfa)
+        model.style_generator.style_head = torch.compile(model.style_generator.style_head)
 
  
     total_steps = len(train_loader) * cfg["num_epochs"]
