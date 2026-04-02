@@ -150,7 +150,7 @@ def wandb_finish(run):
 
 def load_llm(device: str, repo: str = LLM_REPO):
     tokenizer = AutoTokenizer.from_pretrained(repo)
-    model = AutoModelForCausalLM.from_pretrained(repo, torch_dtype=torch.float32)
+    model = AutoModelForCausalLM.from_pretrained(repo, dtype=torch.float32)
     model = model.to(device).eval()
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
