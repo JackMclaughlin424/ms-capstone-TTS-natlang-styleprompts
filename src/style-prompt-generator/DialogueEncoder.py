@@ -221,7 +221,8 @@ class IntraSpeakerTransformer(nn.Module):
         nhead_local = self.transformer_encoder.layers[0].self_attn.num_heads
         final_mask = final_mask.unsqueeze(1).expand(-1, nhead_local, -1, -1).reshape(B * nhead_local, seq_len, seq_len)
 
-        output = self.transformer_encoder(turn_embeddings, mask=final_mask)
+        output = self.transformer_encoder(turn_embeddings, mask=final_mask, is_causal=False)
+
         return output
 
 
@@ -285,7 +286,8 @@ class InterSpeakerTransformer(nn.Module):
         nhead_local = self.transformer_encoder.layers[0].self_attn.num_heads
         final_mask = final_mask.unsqueeze(1).expand(-1, nhead_local, -1, -1).reshape(B * nhead_local, seq_len, seq_len)
 
-        output = self.transformer_encoder(turn_embeddings, mask=final_mask)
+        output = self.transformer_encoder(turn_embeddings, mask=final_mask, is_causal=False)
+
         return output
     
 class SpeakerAwareTransformer(nn.Module):
@@ -333,17 +335,10 @@ class ContextAwareTransformer(nn.Module):
 
 
     def forward(self, turn_embeddings: torch.Tensor):
-        # Input `turn_embeddings` is expected to be (Batch_Size, Num_Turns, Embedding_Dim) which is (B, S, E)
-
-        # Generate causal mask: ensures each position only attends to previous positions
-        seq_len = turn_embeddings.shape[1] # Sequence length is the second dimension for batch_first=True
-        src_mask = nn.Transformer.generate_square_subsequent_mask(seq_len).to(turn_embeddings.device).to(turn_embeddings.dtype)
-
-        # Pass through the Transformer Encoder with the mask
-        output = self.transformer_encoder(turn_embeddings, mask=src_mask)
-
-        # Output is already (Batch_Size, Num_Turns, Embedding_Dim) because batch_first=True
+        seq_len = turn_embeddings.shape[1]
+        output = self.transformer_encoder(turn_embeddings, is_causal=True)
         return output
+
 
 
 class CrossModalFusionAttention(nn.Module):

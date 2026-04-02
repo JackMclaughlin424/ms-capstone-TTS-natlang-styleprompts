@@ -22,6 +22,12 @@ import sys
 
 from tqdm.auto import tqdm
 
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module=r"torch\._dynamo")
+warnings.filterwarnings("ignore", category=UserWarning, module=r"torch\.fx")
+warnings.filterwarnings("ignore", category=UserWarning, module=r"torch\._inductor")
+
+
 
 from train_helpers import *
 
