@@ -27,7 +27,7 @@ LLM_DIM  = 3072  # must match model's hidden_size
 USE_WANDB      = True
 WANDB_PROJECT  = "style-prompt-gen"
 WANDB_ENTITY   = "jdm8943-rochester-institute-of-technology"
-WANDB_RUN_NAME = "baseline-tinyllama-fewshot"
+WANDB_RUN_NAME = "baseline-llama3B-fewshot"
 
 
 def load_dataset(h5_path: str, meta_path: str, num_turns: int, max_len_sec: int) -> ConvoStyleDataset:
@@ -214,7 +214,7 @@ def main(
 
     print(f"\n{len(query_indices)} query chains sampled for evaluation.")
 
-    print(f"\nLoading TinyLlama on {device}...")
+    print(f"\nLoading LLM on {device}...")
     tokenizer, model = load_llm(device, repo=llm_repo)
 
     wandb_run = wandb_init({
@@ -267,7 +267,7 @@ def main(
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Few-shot TinyLlama baseline for style prompt prediction.")
+    p = argparse.ArgumentParser(description="Few-shot LLM baseline for style prompt prediction.")
     p.add_argument("--h5_path",          required=True,              help="Path to merged_audio.h5")
     p.add_argument("--meta_path",        required=True,              help="Path to merged_metadata.parquet")
     p.add_argument("--num_turns",        type=int,   default=5,      help="Conversation chain length (default: 5)")
