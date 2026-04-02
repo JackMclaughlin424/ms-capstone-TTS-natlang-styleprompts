@@ -323,40 +323,6 @@ def train(cfg: Dict[str, Any], resume=True):
                     break
 
 
-            # generate predictions for a full val pass to compute generation metrics
-            model.eval()
-            all_preds, all_refs = [], []
-            with torch.no_grad():
-                for batch in val_loader:
-                    audio       = batch["audio"].to(device)
-                    lengths     = batch["lengths"].to(device)
-                    text_only   = batch["text_only"].to(device)
-                    texts       = batch["transcription"]
-                    speaker_ids = batch["speaker_id"]
-                    targets     = batch["text_description"]
-
-                    if cfg["num_turns"] == 0:
-                        audio     = torch.zeros_like(audio)
-                        text_only = torch.ones_like(text_only)
-
-                    dialogue_ctx = model.scfa(audio, lengths, texts, speaker_ids, text_only)
-                    dialogue_vec = model.pooler(dialogue_ctx)
-                    preds = model.style_generator.generate(dialogue_vec)
-
-                    all_preds.extend(preds)
-                    all_refs.extend([chain[-1] for chain in targets])
-
-            bs_metrics  = compute_bertscore(all_preds, all_refs, device=str(device))
-            met_metrics = compute_meteor(all_preds, all_refs)
-            epoch_metrics.update({f"epoch/{k}": v for k, v in bs_metrics.items()})
-            epoch_metrics.update({f"epoch/{k}": v for k, v in met_metrics.items()})
-            log.info(
-                f"Val metrics — BERTScore F1: {bs_metrics['bertscore_f1_mean']:.4f} "
-                f"(±{bs_metrics['bertscore_f1_std']:.4f})  "
-                f"METEOR: {met_metrics['meteor_mean']:.4f} "
-                f"(±{met_metrics['meteor_std']:.4f})"
-            )
-
 
 
         wandb_log(epoch_metrics, step=global_step, run=wandb_run)
@@ -380,8 +346,45 @@ def train(cfg: Dict[str, Any], resume=True):
                 artifact.add_file(str(ckpt_path))
                 wandb_run.log_artifact(artifact)
  
-    log.info("Training complete.")
+        log.info("Training complete.")
+
+    # compute text-quality metrics once on the final model state 
+    model.eval()
+    all_preds, all_refs = [], []
+    with torch.no_grad():
+        for batch in val_loader:
+            audio       = batch["audio"].to(device)
+            lengths     = batch["lengths"].to(device)
+            text_only   = batch["text_only"].to(device)
+            texts       = batch["transcription"]
+            speaker_ids = batch["speaker_id"]
+            targets     = batch["text_description"]
+
+            if cfg["num_turns"] == 0:
+                audio     = torch.zeros_like(audio)
+                text_only = torch.ones_like(text_only)
+
+            dialogue_ctx = model.scfa(audio, lengths, texts, speaker_ids, text_only)
+            dialogue_vec = model.pooler(dialogue_ctx)
+            preds = model.style_generator.generate(dialogue_vec)
+
+            all_preds.extend(preds)
+            all_refs.extend([chain[-1] for chain in targets])
+
+    bs_metrics  = compute_bertscore(all_preds, all_refs, device=str(device))
+    met_metrics = compute_meteor(all_preds, all_refs)
+    log.info(
+        f"Final val metrics — BERTScore F1: {bs_metrics['bertscore_f1_mean']:.4f} "
+        f"(±{bs_metrics['bertscore_f1_std']:.4f})  "
+        f"METEOR: {met_metrics['meteor_mean']:.4f} "
+        f"(±{met_metrics['meteor_std']:.4f})"
+    )
+    wandb_log({
+        f"final/{k}": v for k, v in {**bs_metrics, **met_metrics}.items()
+    }, step=global_step, run=wandb_run)
+
     wandb_finish(wandb_run)
+
 
 
 # Entry point

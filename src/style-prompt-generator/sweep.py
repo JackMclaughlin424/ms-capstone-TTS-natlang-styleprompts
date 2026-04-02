@@ -116,7 +116,7 @@ def _train_fold(
         if cfg["fp16"] and device.type == "cuda" else None
     )
 
-    best: dict = {"val_loss": float("inf"), "bertscore_f1": 0.0, "meteor": 0.0}
+    best: dict = {"val_loss": float("inf"), "epoch": -1}
     global_step = 0
     fp = f"fold_{fold_idx}"  # metric namespace for this fold in W&B
 
@@ -135,50 +135,54 @@ def _train_fold(
             device, cfg, epoch, global_step, wandb_run=None, is_train=False,
         )
 
-        # generation pass for text-quality metrics
-        model.eval()
-        all_preds, all_refs = [], []
-        with torch.no_grad():
-            for batch in val_loader:
-                audio       = batch["audio"].to(device)
-                lengths     = batch["lengths"].to(device)
-                text_only   = batch["text_only"].to(device)
-                texts       = batch["transcription"]
-                speaker_ids = batch["speaker_id"]
-                targets     = batch["text_description"]
-                if cfg["num_turns"] == 0:
-                    audio     = torch.zeros_like(audio)
-                    text_only = torch.ones_like(text_only)
-                ctx   = model.scfa(audio, lengths, texts, speaker_ids, text_only)
-                vec   = model.pooler(ctx)
-                preds = model.style_generator.generate(vec)
-                all_preds.extend(preds)
-                all_refs.extend([chain[-1] for chain in targets])
-
-        bs  = compute_bertscore(all_preds, all_refs, device=str(device))
-        met = compute_meteor(all_preds, all_refs)
-
-        # log per-fold epoch metrics to the shared sweep run (namespaced by fold)
         wandb_log({
-            f"{fp}/train_loss":   train_loss,
-            f"{fp}/val_loss":     val_loss,
-            f"{fp}/bertscore_f1": bs["bertscore_f1_mean"],
-            f"{fp}/meteor":       met["meteor_mean"],
-            "epoch": epoch,
+            f"{fp}/train_loss": train_loss,
+            f"{fp}/val_loss":   val_loss,
+            "epoch":            epoch,
         }, step=global_step, run=sweep_run)
 
         if val_loss < best["val_loss"]:
-            best = {
-                "val_loss":     val_loss,
-                "bertscore_f1": bs["bertscore_f1_mean"],
-                "meteor":       met["meteor_mean"],
-            }
+            best["val_loss"] = val_loss
+            best["epoch"]    = epoch
+
+    # compute text-quality metrics once, on the final model state
+    model.eval()
+    all_preds, all_refs = [], []
+    with torch.no_grad():
+        for batch in val_loader:
+            audio       = batch["audio"].to(device)
+            lengths     = batch["lengths"].to(device)
+            text_only   = batch["text_only"].to(device)
+            texts       = batch["transcription"]
+            speaker_ids = batch["speaker_id"]
+            targets     = batch["text_description"]
+            if cfg["num_turns"] == 0:
+                audio     = torch.zeros_like(audio)
+                text_only = torch.ones_like(text_only)
+            ctx   = model.scfa(audio, lengths, texts, speaker_ids, text_only)
+            vec   = model.pooler(ctx)
+            preds = model.style_generator.generate(vec)
+            all_preds.extend(preds)
+            all_refs.extend([chain[-1] for chain in targets])
+
+    bs  = compute_bertscore(all_preds, all_refs, device=str(device))
+    met = compute_meteor(all_preds, all_refs)
+
+    wandb_log({
+        f"{fp}/bertscore_f1": bs["bertscore_f1_mean"],
+        f"{fp}/meteor":       met["meteor_mean"],
+    }, step=global_step, run=sweep_run)
 
     # free GPU memory before the next fold loads a fresh model
     del model, optimizer, scheduler, scaler
     torch.cuda.empty_cache()
 
-    return best
+    return {
+        "val_loss":     best["val_loss"],
+        "bertscore_f1": bs["bertscore_f1_mean"],
+        "meteor":       met["meteor_mean"],
+    }
+
 
 
 # Sweep function 
