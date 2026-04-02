@@ -70,7 +70,7 @@ class TurnPositionEncoding(nn.Module):
         positions = torch.arange(T, device=x.device)
         return x + self.embedding(positions)  # broadcasts over B
 
-
+@torch._dynamo.disable
 class DualModalityEmbedder(nn.Module):
 
     def __init__(self, text_encoder_model_pretrained, audio_encoder_model_pretrained,
@@ -156,7 +156,7 @@ class DualModalityEmbedder(nn.Module):
 
         return out  # (B, T, d)
 
-
+    @torch._dynamo.disable
     def forward(self, audio, lengths, texts, text_only=None):
         text_emb  = self.embed_text(texts)
         audio_emb = self.embed_audio(audio, lengths, text_only)
