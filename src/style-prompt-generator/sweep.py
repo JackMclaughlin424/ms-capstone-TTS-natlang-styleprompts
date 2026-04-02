@@ -183,11 +183,74 @@ def _train_fold(
         "meteor":       met["meteor_mean"],
     }
 
+def _train_final_and_eval_test(
+    cfg: dict,
+    trainval_ids: set,
+    test_ids: set,
+    sweep_run,
+    device: torch.device,
+) -> dict:
+    """Train on all train/val data, evaluate generation metrics on held-out test split."""
+    set_seed(cfg["seed"])
+    train_loader, test_loader = _build_fold_loaders(cfg, trainval_ids, test_ids)
+    model = build_model(cfg, device, log)
+
+    total_steps = len(train_loader) * cfg["num_epochs"]
+    optimizer, scheduler = build_optimizer_and_scheduler(model, cfg, total_steps, log)
+    scaler = (
+        torch.amp.GradScaler(device=device)
+        if cfg["fp16"] and device.type == "cuda" else None
+    )
+
+    global_step = 0
+    for epoch in range(cfg["num_epochs"]):
+        _, global_step = run_epoch(
+            model, train_loader, optimizer, scheduler, scaler,
+            device, cfg, epoch, global_step, wandb_run=None, is_train=True,
+        )
+
+    test_loss, _ = run_epoch(
+        model, test_loader, optimizer, scheduler, scaler,
+        device, cfg, 0, global_step, wandb_run=None, is_train=False,
+    )
+
+    model.eval()
+    all_preds, all_refs = [], []
+    with torch.no_grad():
+        for batch in test_loader:
+            audio       = batch["audio"].to(device)
+            lengths     = batch["lengths"].to(device)
+            text_only   = batch["text_only"].to(device)
+            texts       = batch["transcription"]
+            speaker_ids = batch["speaker_id"]
+            targets     = batch["text_description"]
+            if cfg["num_turns"] == 0:
+                audio     = torch.zeros_like(audio)
+                text_only = torch.ones_like(text_only)
+            ctx   = model.scfa(audio, lengths, texts, speaker_ids, text_only)
+            vec   = model.pooler(ctx)
+            preds = model.style_generator.generate(vec)
+            all_preds.extend(preds)
+            all_refs.extend([chain[-1] for chain in targets])
+
+    bs  = compute_bertscore(all_preds, all_refs, device=str(device))
+    met = compute_meteor(all_preds, all_refs)
+
+    del model, optimizer, scheduler, scaler
+    torch.cuda.empty_cache()
+
+    return {
+        "test_loss":     test_loss,
+        "bertscore_f1":  bs["bertscore_f1_mean"],
+        "meteor":        met["meteor_mean"],
+    }
 
 
 # Sweep function 
 
-def _make_sweep_fn(base_cfg: dict, n_folds: int, all_conv_ids: np.ndarray):
+def _make_sweep_fn(base_cfg: dict, n_folds: int, 
+                   all_conv_ids: np.ndarray, test_ids: set):
+
     """Return the callable that W&B's agent invokes for each hyperparameter trial."""
 
     # Precompute folds once so every trial sees the same data curriculum.
@@ -232,7 +295,23 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int, all_conv_ids: np.ndarray):
             "cv/mean_meteor":       float(np.mean(meteor_scores)),
             "cv/std_meteor":        float(np.std(meteor_scores)),
         }
-        run.summary.update(summary)   # persists to the sweep table even after run.finish()
+
+        # ── held-out test evaluation (train on all trainval, eval on test) ────
+        log.info("=== Final model: training on all train/val folds for test eval ===")
+        trainval_ids = set(np.concatenate(folds))
+        test_metrics = _train_final_and_eval_test(cfg, trainval_ids, test_ids, run, device)
+        log.info(
+            f"Test  loss={test_metrics['test_loss']:.4f}  "
+            f"bertscore_f1={test_metrics['bertscore_f1']:.4f}  "
+            f"meteor={test_metrics['meteor']:.4f}"
+        )
+        summary.update({
+            "test/loss":         test_metrics["test_loss"],
+            "test/bertscore_f1": test_metrics["bertscore_f1"],
+            "test/meteor":       test_metrics["meteor"],
+        })
+
+        run.summary.update(summary)
         wandb_log(summary, step=0, run=run)
         log.info(
             f"CV summary  mean_val_loss={summary['cv/mean_val_loss']:.4f} "
@@ -240,6 +319,7 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int, all_conv_ids: np.ndarray):
             f"mean_bertscore_f1={summary['cv/mean_bertscore_f1']:.4f}"
         )
         run.finish()
+
 
     return sweep_fn
 
@@ -265,10 +345,23 @@ def main():
 
     base_cfg     = load_config(args.config)
     base_cfg     = apply_overrides(base_cfg, args.override)
-    all_conv_ids = _get_conv_ids(base_cfg["meta_path"])
-    log.info(f"{len(all_conv_ids)} unique conversations → {args.n_folds}-fold CV")
 
-    sweep_fn = _make_sweep_fn(base_cfg, args.n_folds, all_conv_ids)
+    all_conv_ids = _get_conv_ids(base_cfg["meta_path"])
+
+    # carve out a 10% held-out test split before any fold construction
+    rng_split = np.random.default_rng(base_cfg["seed"])
+    shuffled_all = all_conv_ids.copy()
+    rng_split.shuffle(shuffled_all)
+    n_test       = max(1, int(len(shuffled_all) * 0.10))
+    test_ids     = set(shuffled_all[:n_test])
+    trainval_ids = shuffled_all[n_test:]
+    log.info(
+        f"{len(all_conv_ids)} unique conversations → "
+        f"{len(trainval_ids)} train/val  |  {len(test_ids)} test (held-out)"
+    )
+
+    sweep_fn = _make_sweep_fn(base_cfg, args.n_folds, trainval_ids, test_ids)
+
 
     project = base_cfg["wandb_project"]
     entity  = base_cfg.get("wandb_entity")
