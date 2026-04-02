@@ -4,6 +4,8 @@ import torch.nn.functional as F
 
 from typing import List, Optional
 
+import warnings
+
 class SelfAttentivePooling(nn.Module):
 
     def __init__(self, dim: int):
@@ -105,6 +107,7 @@ class DualModalityEmbedder(nn.Module):
     
 
         with torch.no_grad():
+            warnings.filterwarnings("ignore", message="Support for mismatched key_padding_mask")
             hidden = self.text_encoder.backbone(**tokens).last_hidden_state
         flat_emb = self.text_encoder(hidden, tokens["attention_mask"])  # (B*T, d)
 
@@ -136,6 +139,7 @@ class DualModalityEmbedder(nn.Module):
             inputs = {k: v.to(device) for k, v in inputs.items()}  
 
             with torch.no_grad():
+                warnings.filterwarnings("ignore", message="Support for mismatched key_padding_mask")
                 wavlm_out = self.audio_encoder.backbone(**inputs, output_hidden_states=True)
 
             # weighted sum over all WavLM layers (eq. from StyleCap)
@@ -335,11 +339,8 @@ class ContextAwareTransformer(nn.Module):
 
 
     def forward(self, turn_embeddings: torch.Tensor):
-        seq_len = turn_embeddings.shape[1]
-        causal_mask = nn.Transformer.generate_square_subsequent_mask(
-            seq_len, device=turn_embeddings.device, dtype=turn_embeddings.dtype
-        )
-        output = self.transformer_encoder(turn_embeddings, mask=causal_mask, is_causal=True)
+        
+        output = self.transformer_encoder(turn_embeddings, is_causal=True)
         return output
 
 
