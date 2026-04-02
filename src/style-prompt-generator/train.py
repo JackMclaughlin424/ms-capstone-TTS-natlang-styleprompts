@@ -256,8 +256,14 @@ def train(cfg: Dict[str, Any], resume=True):
 
     # compile model for faster training
     if cfg["compile"]:
-        model.scfa = torch.compile(model.scfa)
+        model.scfa.ctx_audio = torch.compile(model.scfa.ctx_audio)
+        model.scfa.ctx_text  = torch.compile(model.scfa.ctx_text)
+        model.scfa.cfa       = torch.compile(model.scfa.cfa)
+        model.scfa.ffn_audio = torch.compile(model.scfa.ffn_audio)
+        model.scfa.ffn_text  = torch.compile(model.scfa.ffn_text)
+        # spk_audio/spk_text take string speaker_ids so skip for now
         model.style_generator.style_head = torch.compile(model.style_generator.style_head)
+
 
  
     total_steps = len(train_loader) * cfg["num_epochs"]

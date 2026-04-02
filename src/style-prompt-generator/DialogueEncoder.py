@@ -524,7 +524,7 @@ class SCFA(nn.Module):
         z_cat = torch.cat([z_ctx, z_intra, z_inter], dim=-1)
         return ffn(z_cat, emb)  # residual uses full d_model emb
 
- 
+    @torch._dynamo.disable
     def forward(
         self,
         audio:       torch.Tensor,       # (B, T, samples)
