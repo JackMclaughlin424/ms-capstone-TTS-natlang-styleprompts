@@ -1,5 +1,7 @@
 """
-sweep.py  --config path/to/config.json [options]
+sweep.py  --config path/to/sweep_base_config.json
+          --sweep_values path/to/sweep_values.json
+          [options]
 
 Runs a W&B hyperparameter sweep where each trial performs N-fold cross-validation.
 Conversations are split at the conv_id level (same anti-leakage logic as train.py).
@@ -7,11 +9,12 @@ Conversations are split at the conv_id level (same anti-leakage logic as train.p
 Usage
 -----
 # Start a new sweep and run one agent:
-    python sweep.py --config default_config.json --n_folds 5 --count 20
+    python sweep.py --config default_sweep_config.json --sweep_values default_sweep_values.json --n_folds 5 --count 20
 
 # Join an existing sweep from a second machine:
-    python sweep.py --config default_config.json --sweep_id <SHORT_ID> --count 10
+    python sweep.py --config default_sweep_config.json --sweep_values default_sweep_values.json --sweep_id <SHORT_ID> --count 10
 """
+
 
 import argparse
 import logging
@@ -21,6 +24,7 @@ import numpy as np
 import pandas as pd
 import torch
 import wandb
+import json
 
 from train_helpers import (
     load_config, apply_overrides, set_seed,
@@ -31,37 +35,14 @@ from train import run_epoch
 from ConvoStyleDataset import ConvoStyleDataset, collate_pad
 from torch.utils.data import DataLoader
 
+logging.getLogger().addHandler(logging.NullHandler())
+logging.getLogger().setLevel(logging.INFO)
 log = logging.getLogger(__name__)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)s  %(message)s",
-    datefmt="%H:%M:%S",
-)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("transformers").setLevel(logging.WARNING)
+logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 
-# Search space 
-# Adjust the parameters dict to match the axes you want to explore.
-SWEEP_CONFIG = {
-    "method": "bayes",  # "bayes" | "random" | "grid"
-    "metric": {"name": "cv/mean_val_loss", "goal": "minimize"},
-    "parameters": {
-        "learning_rate": {
-            "distribution": "log_uniform_values",
-            "min": 1e-5,
-            "max": 1e-3,
-        },
-        "batch_size":         {"values": [16, 32]},
-        "num_prefix_tokens":  {"values": [10, 20, 40]},
-        "warmup_ratio":       {"values": [0.05, 0.1, 0.2]},
-        "weight_decay": {
-            "distribution": "log_uniform_values",
-            "min": 1e-4,
-            "max": 1e-1,
-        },
-        "num_mapping_layers": {"values": [4, 8]},
-        "dialogue_pooler":    {"values": ["attentive", "last"]},
-        "num_turns":    {"values": [0,1,3,5]},
-    },
-}
+
 
 
 # Data helpers 
@@ -109,10 +90,7 @@ def _train_fold(
 
     total_steps = len(train_loader) * cfg["num_epochs"]
     optimizer, scheduler = build_optimizer_and_scheduler(model, cfg, total_steps, log)
-    scaler = (
-        torch.amp.GradScaler(device=device)
-        if cfg["fp16"] and device.type == "cuda" else None
-    )
+    scaler = None
 
     best: dict = {"val_loss": float("inf"), "epoch": -1}
     global_step = 0
@@ -148,20 +126,22 @@ def _train_fold(
     all_preds, all_refs = [], []
     with torch.no_grad():
         for batch in val_loader:
-            audio       = batch["audio"].to(device)
-            lengths     = batch["lengths"].to(device)
-            text_only   = batch["text_only"].to(device)
-            texts       = batch["transcription"]
-            speaker_ids = batch["speaker_id"]
-            targets     = batch["text_description"]
-            if cfg["num_turns"] == 0:
-                audio     = torch.zeros_like(audio)
-                text_only = torch.ones_like(text_only)
-            ctx   = model.scfa(audio, lengths, texts, speaker_ids, text_only)
-            vec   = model.pooler(ctx)
+            with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
+                audio       = batch["audio"].to(device)
+                lengths     = batch["lengths"].to(device)
+                text_only   = batch["text_only"].to(device)
+                texts       = batch["transcription"]
+                speaker_ids = batch["speaker_id"]
+                targets     = batch["text_description"]
+                if cfg["num_turns"] == 0:
+                    audio     = torch.zeros_like(audio)
+                    text_only = torch.ones_like(text_only)
+                ctx   = model.scfa(audio, lengths, texts, speaker_ids, text_only)
+                vec   = model.pooler(ctx)
             preds = model.style_generator.generate(vec)
             all_preds.extend(preds)
             all_refs.extend([chain[-1] for chain in targets])
+
 
     bs  = compute_bertscore(all_preds, all_refs, device=str(device))
     met = compute_meteor(all_preds, all_refs)
@@ -195,10 +175,7 @@ def _train_final_and_eval_test(
 
     total_steps = len(train_loader) * cfg["num_epochs"]
     optimizer, scheduler = build_optimizer_and_scheduler(model, cfg, total_steps, log)
-    scaler = (
-        torch.amp.GradScaler(device=device)
-        if cfg["fp16"] and device.type == "cuda" else None
-    )
+    scaler = None
 
     global_step = 0
     for epoch in range(cfg["num_epochs"]):
@@ -216,20 +193,21 @@ def _train_final_and_eval_test(
     all_preds, all_refs = [], []
     with torch.no_grad():
         for batch in test_loader:
-            audio       = batch["audio"].to(device)
-            lengths     = batch["lengths"].to(device)
-            text_only   = batch["text_only"].to(device)
-            texts       = batch["transcription"]
-            speaker_ids = batch["speaker_id"]
-            targets     = batch["text_description"]
-            if cfg["num_turns"] == 0:
-                audio     = torch.zeros_like(audio)
-                text_only = torch.ones_like(text_only)
-            ctx   = model.scfa(audio, lengths, texts, speaker_ids, text_only)
-            vec   = model.pooler(ctx)
-            preds = model.style_generator.generate(vec)
-            all_preds.extend(preds)
-            all_refs.extend([chain[-1] for chain in targets])
+            with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
+                audio       = batch["audio"].to(device)
+                lengths     = batch["lengths"].to(device)
+                text_only   = batch["text_only"].to(device)
+                texts       = batch["transcription"]
+                speaker_ids = batch["speaker_id"]
+                targets     = batch["text_description"]
+                if cfg["num_turns"] == 0:
+                    audio     = torch.zeros_like(audio)
+                    text_only = torch.ones_like(text_only)
+                ctx   = model.scfa(audio, lengths, texts, speaker_ids, text_only)
+                vec   = model.pooler(ctx)
+                preds = model.style_generator.generate(vec)
+                all_preds.extend(preds)
+                all_refs.extend([chain[-1] for chain in targets])
 
     bs  = compute_bertscore(all_preds, all_refs, device=str(device))
     met = compute_meteor(all_preds, all_refs)
@@ -280,7 +258,7 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int,
                 f"bertscore_f1={metrics['bertscore_f1']:.4f}  meteor={metrics['meteor']:.4f}"
             )
 
-        # ── aggregate across folds (the sweep optimises this) ─────────────────
+        # aggregate across folds (the sweep optimises this)
         val_losses    = [m["val_loss"]     for m in fold_metrics]
         bert_f1s      = [m["bertscore_f1"] for m in fold_metrics]
         meteor_scores = [m["meteor"]       for m in fold_metrics]
@@ -294,7 +272,7 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int,
             "cv/std_meteor":        float(np.std(meteor_scores)),
         }
 
-        # ── held-out test evaluation (train on all trainval, eval on test) ────
+        # held-out test evaluation (train on all trainval, eval on test) 
         log.info("=== Final model: training on all train/val folds for test eval ===")
         trainval_ids = set(np.concatenate(folds))
         test_metrics = _train_final_and_eval_test(cfg, trainval_ids, test_ids, run, device)
@@ -328,8 +306,10 @@ def main():
     parser = argparse.ArgumentParser(
         description="W&B hyperparameter sweep with N-fold cross-validation."
     )
-    parser.add_argument("--config",   required=True,
-                        help="Base config JSON (same format as train.py)")
+    parser.add_argument("--config",        required=True,
+                        help="Base config JSON with fixed hyperparameters (e.g. default_sweep_config.json).")
+    parser.add_argument("--sweep_values",  required=True,
+                        help="W&B sweep search-space JSON (e.g. default_sweep_values.json).")
     parser.add_argument("--n_folds",  type=int, default=5,
                         help="Number of CV folds (default: 5)")
     parser.add_argument("--sweep_id", default=None,
@@ -341,8 +321,12 @@ def main():
                         help="Override base config fields (same syntax as train.py)")
     args = parser.parse_args()
 
-    base_cfg     = load_config(args.config)
-    base_cfg     = apply_overrides(base_cfg, args.override)
+    base_cfg      = load_config(args.config)
+    base_cfg      = apply_overrides(base_cfg, args.override)
+
+    with open(args.sweep_values) as f:
+        sweep_config = json.load(f)
+
 
     all_conv_ids = _get_conv_ids(base_cfg["meta_path"])
 
@@ -374,10 +358,11 @@ def main():
         sweep_id = qualified
     else:
         sweep_id = wandb.sweep(
-            deepcopy(SWEEP_CONFIG),
+            deepcopy(sweep_config),
             project=project,
             entity=entity,
         )
+
         log.info(f"Created sweep ID: {sweep_id}")
 
     wandb.agent(sweep_id, function=sweep_fn, count=args.count)

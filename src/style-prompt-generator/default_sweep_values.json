@@ -15,25 +15,16 @@
             "min": 1e-5,
             "max": 1e-3
         },
-        "batch_size": {
-            "values": [
-                8,
-                16,
-                32
-            ]
+        "weight_decay": {
+            "distribution": "log_uniform_values",
+            "min": 1e-4,
+            "max": 1e-2
         },
         "dropout": {
             "values": [
                 0.1,
                 0.2,
                 0.3
-            ]
-        },
-        "num_prefix_tokens": {
-            "values": [
-                10,
-                20,
-                40
             ]
         },
         "warmup_ratio": {
@@ -43,10 +34,12 @@
                 0.2
             ]
         },
-        "weight_decay": {
-            "distribution": "log_uniform_values",
-            "min": 1e-4,
-            "max": 1e-1
+        "num_prefix_tokens": {
+            "values": [
+                10,
+                20,
+                40
+            ]
         },
         "num_mapping_layers": {
             "values": [
@@ -60,18 +53,11 @@
                 "last"
             ]
         },
-        "num_unfrozen_bert": {
+        "system_prompt": {
             "values": [
-                0,
-                1,
-                2
-            ]
-        },
-        "num_unfrozen_wavlm": {
-            "values": [
-                0,
-                1,
-                2
+                "",
+                "Speaking style:",
+                "You are a speaking style descriptor. Given a conversation history, generate a concise speaking style prompt for the next utterance. Focus on prosodic qualities: pace, pitch, energy, emotion, and tone. Be specific and brief (1-2 sentences)."
             ]
         }
     }
