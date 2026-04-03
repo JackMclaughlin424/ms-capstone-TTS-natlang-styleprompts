@@ -36,10 +36,11 @@
                 40
             ]
         },
-        "num_mapping_layers": {
+        "num_unfrozen_embedder_layers": {
             "values": [
-                4,
-                8
+                0,
+                1,
+                2
             ]
         },
         "dialogue_pooler": {

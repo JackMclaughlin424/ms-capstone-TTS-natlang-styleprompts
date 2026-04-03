@@ -253,6 +253,13 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int,
         for key, val in run.config.items():
             if key in cfg:
                 cfg[key] = val
+
+        # expand shared sweep param into per-encoder keys
+        if "num_unfrozen_embedder_layers" in run.config:
+            n = run.config["num_unfrozen_embedder_layers"]
+            cfg["num_unfrozen_bert"]  = n
+            cfg["num_unfrozen_wavlm"] = n
+
         run.config.update({"n_folds": n_folds}, allow_val_change=True)
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
