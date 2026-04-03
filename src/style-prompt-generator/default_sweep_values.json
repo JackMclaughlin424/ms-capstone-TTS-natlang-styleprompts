@@ -1,10 +1,5 @@
 {
     "method": "bayes",
-    "_comment_method_options": [
-        "bayes",
-        "random",
-        "grid"
-    ],
     "metric": {
         "name": "cv/mean_val_loss",
         "goal": "minimize"

@@ -90,7 +90,7 @@ def _train_fold(
 
     total_steps = len(train_loader) * cfg["num_epochs"]
     optimizer, scheduler = build_optimizer_and_scheduler(model, cfg, total_steps, log)
-    scaler = None
+    
 
     best: dict = {"val_loss": float("inf"), "epoch": -1}
     global_step = 0
@@ -99,7 +99,7 @@ def _train_fold(
     for epoch in range(cfg["num_epochs"]):
         # pass wandb_run=None so per-step metrics don't spam the sweep run
         train_loss, global_step = run_epoch(
-            model, train_loader, optimizer, scheduler, scaler,
+            model, train_loader, optimizer, scheduler, 
             device, cfg, epoch, global_step, wandb_run=None, is_train=True,
         )
 
@@ -107,7 +107,7 @@ def _train_fold(
             continue
 
         val_loss, _ = run_epoch(
-            model, val_loader, optimizer, scheduler, scaler,
+            model, val_loader, optimizer, scheduler, 
             device, cfg, epoch, global_step, wandb_run=None, is_train=False,
         )
 
@@ -175,17 +175,17 @@ def _train_final_and_eval_test(
 
     total_steps = len(train_loader) * cfg["num_epochs"]
     optimizer, scheduler = build_optimizer_and_scheduler(model, cfg, total_steps, log)
-    scaler = None
+   
 
     global_step = 0
     for epoch in range(cfg["num_epochs"]):
         _, global_step = run_epoch(
-            model, train_loader, optimizer, scheduler, scaler,
+            model, train_loader, optimizer, scheduler, 
             device, cfg, epoch, global_step, wandb_run=None, is_train=True,
         )
 
     test_loss, _ = run_epoch(
-        model, test_loader, optimizer, scheduler, scaler,
+        model, test_loader, optimizer, scheduler, 
         device, cfg, 0, global_step, wandb_run=None, is_train=False,
     )
 
