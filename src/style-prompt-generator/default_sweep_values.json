@@ -1,5 +1,5 @@
 {
-    "method": "grid",
+    "method": "bayes",
     "_comment_method_options": [
         "bayes",
         "random",
