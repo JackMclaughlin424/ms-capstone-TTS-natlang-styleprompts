@@ -27,6 +27,8 @@
     "grad_clip": 1.0,
     "lr_schedule": "cosine",
     "eval_every_n_epochs": 1,
+    "early_stopping_patience": 3,
+    "early_stopping_min_delta": 1e-3,
     "seed": 42,
     "num_workers": 4,
     "_comment_param_section_wandb": "W&B settings",

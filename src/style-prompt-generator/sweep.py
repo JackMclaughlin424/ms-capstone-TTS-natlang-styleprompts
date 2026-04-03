@@ -94,12 +94,15 @@ def _train_fold(
 
     best: dict = {"val_loss": float("inf"), "epoch": -1}
     global_step = 0
-    fp = f"fold_{fold_idx}"  # metric namespace for this fold in W&B
+    fp = f"fold_{fold_idx}"
+
+    patience         = cfg.get("early_stopping_patience", 3)
+    min_delta        = cfg.get("early_stopping_min_delta", 1e-4)
+    epochs_no_improve = 0
 
     for epoch in range(cfg["num_epochs"]):
-        # pass wandb_run=None so per-step metrics don't spam the sweep run
         train_loss, global_step = run_epoch(
-            model, train_loader, optimizer, scheduler, 
+            model, train_loader, optimizer, scheduler,
             device, cfg, epoch, global_step, wandb_run=None, is_train=True,
         )
 
@@ -107,7 +110,7 @@ def _train_fold(
             continue
 
         val_loss, _ = run_epoch(
-            model, val_loader, optimizer, scheduler, 
+            model, val_loader, optimizer, scheduler,
             device, cfg, epoch, global_step, wandb_run=None, is_train=False,
         )
 
@@ -117,9 +120,17 @@ def _train_fold(
             "epoch":            epoch,
         }, step=global_step, run=sweep_run)
 
-        if val_loss < best["val_loss"]:
+        if val_loss < best["val_loss"] - min_delta:
             best["val_loss"] = val_loss
             best["epoch"]    = epoch
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+
+        if patience > 0 and epochs_no_improve >= patience:
+            log.info(f"  Fold {fold_idx}: early stop at epoch {epoch} (no improvement for {patience} evals)")
+            break
+
 
     # compute text-quality metrics once, on the final model state
     model.eval()
@@ -152,7 +163,7 @@ def _train_fold(
     }, step=global_step, run=sweep_run)
 
     # free GPU memory before the next fold loads a fresh model
-    del model, optimizer, scheduler, scaler
+    del model, optimizer, scheduler
     torch.cuda.empty_cache()
 
     return {

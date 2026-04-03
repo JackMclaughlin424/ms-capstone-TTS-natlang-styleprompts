@@ -100,7 +100,7 @@ DEFAULTS: Dict[str, Any] = {
     "sample_rate":           16_000,
 
     # logging
-    "log_every_n_steps":     10,
+    "log_every_n_steps":     50,
     "run_name":              None,        # optional label shown in log lines
 
     # wandb -- all optional; set use_wandb=false to disable entirely
