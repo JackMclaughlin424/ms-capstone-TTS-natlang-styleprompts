@@ -19,7 +19,7 @@ Usage
 import argparse
 import logging
 from copy import deepcopy
-
+import gc
 import numpy as np
 import pandas as pd
 import torch
@@ -130,6 +130,8 @@ def _train_fold(
         if patience > 0 and epochs_no_improve >= patience:
             log.info(f"  Fold {fold_idx}: early stop at epoch {epoch} (no improvement for {patience} evals)")
             break
+
+        gc.collect()
 
 
     # compute text-quality metrics once, on the final model state
@@ -337,7 +339,8 @@ def main():
                         help="Max trials this agent will run (default: unlimited)")
     parser.add_argument("--override", nargs="*", metavar="KEY=VALUE",
                         help="Override base config fields (same syntax as train.py)")
-    
+    parser.add_argument("--sweep_id_file", default="tmp/sweep_id.txt",
+                    help="Path to write the created sweep ID to, so other agents can join.")
     args = parser.parse_args()
 
     base_cfg      = load_config(args.config)
@@ -368,21 +371,18 @@ def main():
     entity  = base_cfg.get("wandb_entity")
 
     if args.sweep_id:
-        # check if the sweep actually exists before trying to join it
-        api = wandb.Api()
-        qualified = f"{entity}/{project}/{args.sweep_id}" if entity else f"{project}/{args.sweep_id}"
-        try:
-            api.sweep(qualified)
-            log.info(f"Found existing sweep: {qualified}")
-            sweep_id = qualified
-        except Exception:
-            # sweep doesn't exist yet, so create it and use the new ID
-            log.info(f"Sweep '{args.sweep_id}' not found, creating it now...")
-            sweep_id = wandb.sweep(deepcopy(sweep_config), project=project, entity=entity)
-            log.info(f"Created sweep: {sweep_id}")
+        # agent 2 path: just join the existing sweep
+        sweep_id = args.sweep_id
+        log.info(f"Joining existing sweep: {sweep_id}")
     else:
+        # agent 1 path: create the sweep
         sweep_id = wandb.sweep(deepcopy(sweep_config), project=project, entity=entity)
         log.info(f"Created sweep: {sweep_id}")
+
+        if args.sweep_id_file:
+            # write it out so the sbatch script can unblock agent 2
+            with open(args.sweep_id_file, "w") as f:
+                f.write(sweep_id)
 
     wandb.agent(sweep_id, function=sweep_fn, count=args.count)
 
