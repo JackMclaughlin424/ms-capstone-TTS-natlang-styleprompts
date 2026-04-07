@@ -337,8 +337,7 @@ def main():
                         help="Max trials this agent will run (default: unlimited)")
     parser.add_argument("--override", nargs="*", metavar="KEY=VALUE",
                         help="Override base config fields (same syntax as train.py)")
-    parser.add_argument("--sweep_id", default=None,
-                        help="Sweep ID to join. If it doesn't exist yet, the sweep is created first.")  
+    
     args = parser.parse_args()
 
     base_cfg      = load_config(args.config)
