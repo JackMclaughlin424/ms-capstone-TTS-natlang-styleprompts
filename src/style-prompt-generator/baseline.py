@@ -246,17 +246,16 @@ def main(
         user_prompt  = build_user_prompt(query_chain)
         
         prediction   = query_llm(tokenizer, model, system_prompt, user_prompt, device, max_new_tokens)
+        ground_truth = query_chain[-1].get("text_description", "").strip()
 
         # free intermediate objects each iteration
         del few_shot_chains, system_prompt, user_prompt, query_chain
         if device == "cuda":
             torch.cuda.empty_cache()
 
-
-        ground_truth = query_chain[-1].get("text_description", "").strip()
-
         all_preds.append(prediction)
         all_refs.append(ground_truth)
+
 
         print(f"\n[{idx+1}/{len(query_indices)}]")
         print(f"  Predicted : {prediction}")
