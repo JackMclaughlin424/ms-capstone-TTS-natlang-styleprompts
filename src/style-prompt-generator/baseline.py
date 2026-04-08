@@ -200,7 +200,9 @@ def main(
     max_len_sec: int = 15,
     seed: int = 42,
     llm_repo: str = LLM_REPO,
+    output_path: str = "baseline_outputs.json",
 ):
+
 
     random.seed(seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -249,6 +251,8 @@ def main(
 
 
     all_preds, all_refs = [], []
+    records = []
+
 
     for idx, qi in enumerate(query_indices):
         few_shot_pool   = [i for i in all_indices if i != qi]
@@ -257,12 +261,20 @@ def main(
 
         query_chain  = ds[qi]
         user_prompt  = build_user_prompt(query_chain)
-        
         prediction   = query_llm(tokenizer, model, system_prompt, user_prompt, device, max_new_tokens)
         ground_truth = query_chain[-1].get("text_description", "").strip()
 
+        records.append({
+            "index":        qi,
+            "system_prompt": system_prompt,
+            "user_prompt":  user_prompt,
+            "prediction":   prediction,
+            "ground_truth": ground_truth,
+        })
+
         # free intermediate objects each iteration
         del few_shot_chains, system_prompt, user_prompt, query_chain
+
         if device == "cuda":
             torch.cuda.empty_cache()
 
@@ -273,6 +285,10 @@ def main(
         print(f"\n[{idx+1}/{len(query_indices)}]")
         print(f"  Predicted : {prediction}")
         print(f"  Reference : {ground_truth}")
+
+    with open(output_path, "w") as f:
+        json.dump(records, f, indent=2)
+    print(f"\nSaved {len(records)} inference records to {output_path}")
 
     print("\n" + "="*60)
     print("EVALUATION METRICS")
@@ -304,6 +320,9 @@ def parse_args():
     p.add_argument("--llm_repo", type=str, default=LLM_REPO, help="HuggingFace repo for the LLM (default: Llama 3.2 3B)")
 
     p.add_argument("--seed",             type=int,   default=42,     help="Random seed (default: 42)")
+    p.add_argument("--output_path", type=str, default="baseline_outputs.json",
+            help="Path to save per-inference JSON output (default: baseline_outputs.json)")
+
     return p.parse_args()
 
 
