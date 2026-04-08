@@ -9,6 +9,7 @@ import random
 import textwrap
 import argparse
 import numpy as np
+import pandas as pd 
 
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -34,10 +35,11 @@ def load_dataset(h5_path: str, meta_path: str, num_turns: int, max_len_sec: int)
     return ConvoStyleDataset(
         h5_path=h5_path,
         meta_path=meta_path,
-        meta_columns=["transcription", "text_description", "speakerid"],
+        meta_columns=["transcription", "text_description", "speakerid", "conv_id"],
         num_turns=num_turns,
         max_len_sec=max_len_sec,
     )
+
 
 
 def chain_to_text(chain: list, include_last_style: bool = True) -> str:
@@ -207,15 +209,26 @@ def main(
     ds = load_dataset(h5_path, meta_path, num_turns, max_len_sec)
     print(f"  {len(ds)} chains available")
 
-    # filter out text-only rows w/ no text_description
+
+    # reproduce the same 10% held-out test split as sweep.py
+    all_conv_ids = np.array(pd.read_parquet(meta_path)["conv_id"].unique())
+    rng_split = np.random.default_rng(seed)
+    shuffled_all = all_conv_ids.copy()
+    rng_split.shuffle(shuffled_all)
+    n_test   = max(1, int(len(shuffled_all) * 0.10))
+    test_ids = set(shuffled_all[:n_test])
+    print(f"  Test split: {len(test_ids)} conv_ids (10% held-out, seed={seed})")
+
     all_indices = [
         i for i, chain in enumerate(ds._chains)
-        if all(
+        if chain[-1].get("conv_id") in test_ids           # same held-out split as sweep
+        and all(
             chain_row.get("text_description") not in (None, "")
             and not (isinstance(chain_row.get("text_description"), float) and np.isnan(chain_row.get("text_description")))
             for chain_row in chain
         )
     ]
+
 
     query_indices = random.sample(all_indices, min(num_eval_samples, len(all_indices)))
 
