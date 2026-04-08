@@ -52,13 +52,12 @@ def _get_conv_ids(meta_path: str) -> np.ndarray:
 
 
 def _build_fold_loaders(cfg: dict, train_ids: set, val_ids: set):
-    effective_turns = max(cfg["num_turns"], 1)
     ds_kwargs = dict(
         h5_path=cfg["h5_path"],
         meta_path=cfg["meta_path"],
         meta_columns=["transcription", "text_description"],
         sample_rate=cfg["sample_rate"],
-        num_turns=effective_turns,
+        num_turns=cfg["num_turns"],
         max_len_sec=cfg["max_len_sec"],
     )
     train_ds = ConvoStyleDataset(**ds_kwargs, allowed_conv_ids=train_ids)

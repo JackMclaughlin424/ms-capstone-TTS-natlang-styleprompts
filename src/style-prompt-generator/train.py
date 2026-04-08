@@ -65,10 +65,10 @@ def compute_loss(
     # anchor is always the last turn
     anchor_prompts = [chain[-1] for chain in targets]  # list[B]
 
-    # num_turns == 0: treat as text-only by zeroing audio
-    if cfg["num_turns"] == 0:
-        audio = torch.zeros_like(audio)
-        text_only = torch.ones_like(text_only)
+    # anchor (last turn) is always text-only: predicting style for audio not yet recorded
+    audio[:, -1, :] = 0
+    lengths[:, -1]  = 0
+    text_only[:, -1] = True
 
 
     #

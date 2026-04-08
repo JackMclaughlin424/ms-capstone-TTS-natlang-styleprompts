@@ -48,7 +48,7 @@ DEFAULTS: Dict[str, Any] = {
     "h5_path":               None,        # required
     "meta_path":             None,        # required
     "output_dir":            "runs/exp",
-    "num_turns":             5,           # 0 means text-only (script-only mode, no audio)
+    "num_turns":             5,           # >=1; anchor (last turn) is always text-only
     "max_len_sec":           15,        # trim/pad audio to this duration
 
     # model dimensions
@@ -115,7 +115,7 @@ VALID = {
     "d_model":          {192, 384, 768},
     "dialogue_pooler":  {"attentive", "last"},
     "lr_schedule":      {"cosine", "linear", "constant"},
-    "num_turns":        set(range(0, 6)),   # 0-5 inclusive
+    "num_turns":        set(range(1, 6)),   # 1-5 inclusive
     "num_prefix_tokens": {10, 20, 40},
     "batch_size":       {4, 8, 16, 32},
 }
@@ -310,17 +310,14 @@ def build_model(cfg: Dict[str, Any], device: torch.device, log) -> SCFAWithStyle
 # Data
 
 def build_dataloaders(cfg: Dict[str, Any], log):
-    # num_turns == 0 means script-only (text only), represented as 1 turn with no audio
-    effective_turns = max(cfg["num_turns"], 1)
-
     train_ds, val_ds = ConvoStyleDataset.train_val_split(
         val_split=cfg["val_split"],
         seed=cfg["seed"],
         h5_path=cfg["h5_path"],
         meta_path=cfg["meta_path"],
-        meta_columns=["transcription", "text_description"], # text_description is GT style description
+        meta_columns=["transcription", "text_description"],
         sample_rate=cfg["sample_rate"],
-        num_turns=effective_turns,
+        num_turns=cfg["num_turns"],
         max_len_sec=cfg["max_len_sec"],
     )
 
