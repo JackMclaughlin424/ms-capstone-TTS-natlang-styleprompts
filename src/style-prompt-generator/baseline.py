@@ -150,7 +150,7 @@ def wandb_finish(run):
 
 def load_llm(device: str, repo: str = LLM_REPO):
     tokenizer = AutoTokenizer.from_pretrained(repo)
-    model = AutoModelForCausalLM.from_pretrained(repo, dtype=torch.float32)
+    model = AutoModelForCausalLM.from_pretrained(repo, dtype=torch.bfloat16)
     model = model.to(device).eval()
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -177,7 +177,14 @@ def query_llm(tokenizer, model, system_prompt, user_prompt, device, max_new_toke
 
 
     generated = output_ids[0, inputs["input_ids"].shape[1]:]
-    return tokenizer.decode(generated, skip_special_tokens=True).strip()
+    result = tokenizer.decode(generated, skip_special_tokens=True).strip()
+
+    # free GPU memory from this inference
+    del inputs, output_ids, generated
+    if device == "cuda":
+        torch.cuda.empty_cache()
+
+    return result
 
 
 
@@ -237,7 +244,14 @@ def main(
 
         query_chain  = ds[qi]
         user_prompt  = build_user_prompt(query_chain)
+        
         prediction   = query_llm(tokenizer, model, system_prompt, user_prompt, device, max_new_tokens)
+
+        # free intermediate objects each iteration
+        del few_shot_chains, system_prompt, user_prompt, query_chain
+        if device == "cuda":
+            torch.cuda.empty_cache()
+
 
         ground_truth = query_chain[-1].get("text_description", "").strip()
 
