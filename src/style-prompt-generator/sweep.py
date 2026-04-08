@@ -51,7 +51,8 @@ logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 # Data helpers 
 
 def _get_conv_ids(meta_path: str) -> np.ndarray:
-    return pd.read_parquet(meta_path)["conv_id"].unique()
+    return np.array(pd.read_parquet(meta_path)["conv_id"].unique())
+
 
 
 def _build_fold_loaders(cfg: dict, train_ids: set, val_ids: set):
@@ -386,7 +387,9 @@ def main():
             with open(args.sweep_id_file, "w") as f:
                 f.write(sweep_id)
 
-    wandb.agent(sweep_id, function=sweep_fn, count=args.count)
+    wandb.agent(sweep_id, function=sweep_fn, count=args.count,
+                project=project, entity=entity)
+
 
 
 
