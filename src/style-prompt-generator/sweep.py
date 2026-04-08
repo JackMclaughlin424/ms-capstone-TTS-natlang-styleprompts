@@ -35,8 +35,11 @@ from train import run_epoch
 from ConvoStyleDataset import ConvoStyleDataset, collate_pad
 from torch.utils.data import DataLoader
 
-logging.getLogger().addHandler(logging.NullHandler())
-logging.getLogger().setLevel(logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
 log = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("transformers").setLevel(logging.WARNING)
