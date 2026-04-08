@@ -210,7 +210,7 @@ def main(
     print(f"  {len(ds)} chains available")
 
 
-    # reproduce the same 10% held-out test split as sweep.py
+    # reproduce the same 10% held-out test split as sweep.py (seeds must be same)
     all_conv_ids = np.array(pd.read_parquet(meta_path)["conv_id"].unique())
     rng_split = np.random.default_rng(seed)
     shuffled_all = all_conv_ids.copy()
