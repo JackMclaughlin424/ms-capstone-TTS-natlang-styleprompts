@@ -139,7 +139,8 @@ def _train_fold(
 
     # compute text-quality metrics once, on the final model state
     model.eval()
-    all_preds, all_refs = [], []
+    all_preds, all_refs, all_texts = [], [], []
+
     with torch.no_grad():
         for batch in val_loader:
             with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
@@ -155,8 +156,10 @@ def _train_fold(
                 ctx   = model.scfa(audio, lengths, texts, speaker_ids, text_only)
                 vec   = model.pooler(ctx)
             preds = model.style_generator.generate(vec)
+            
             all_preds.extend(preds)
             all_refs.extend([chain[-1] for chain in targets])
+            all_texts.extend(texts)
 
 
     bs  = compute_bertscore(all_preds, all_refs, device=str(device))
@@ -166,6 +169,13 @@ def _train_fold(
         f"{fp}/bertscore_f1": bs["bertscore_f1_mean"],
         f"{fp}/meteor":       met["meteor_mean"],
     }, step=global_step, run=sweep_run)
+
+    for i, (pred, ref, txt) in enumerate(zip(all_preds[:3], all_refs[:3], all_texts[:3])):
+        log.info(f"  [Fold {fold_idx} Sample {i+1}]")
+        log.info(f"    Dialogue : {txt}")
+        log.info(f"    Predicted: {pred}")
+        log.info(f"    Reference: {ref}")
+
 
     # free GPU memory before the next fold loads a fresh model
     del model, optimizer, scheduler
@@ -206,7 +216,8 @@ def _train_final_and_eval_test(
     )
 
     model.eval()
-    all_preds, all_refs = [], []
+    all_preds, all_refs, all_texts = [], [], []
+
     with torch.no_grad():
         for batch in test_loader:
             with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
@@ -222,13 +233,28 @@ def _train_final_and_eval_test(
                 ctx   = model.scfa(audio, lengths, texts, speaker_ids, text_only)
                 vec   = model.pooler(ctx)
                 preds = model.style_generator.generate(vec)
+
                 all_preds.extend(preds)
                 all_refs.extend([chain[-1] for chain in targets])
+                all_texts.extend(texts)
 
     bs  = compute_bertscore(all_preds, all_refs, device=str(device))
     met = compute_meteor(all_preds, all_refs)
 
-    del model, optimizer, scheduler, scaler
+    # log test metrics
+    wandb_log({
+        f"test/bertscore_f1": bs["bertscore_f1_mean"],
+        f"test/meteor":       met["meteor_mean"],
+    }, step=global_step, run=sweep_run)
+
+    for i, (pred, ref, txt) in enumerate(zip(all_preds[:3], all_refs[:3], all_texts[:3])):
+        log.info(f"  [Test Sample {i+1}]")
+        log.info(f"    Dialogue : {txt}")
+        log.info(f"    Predicted: {pred}")
+        log.info(f"    Reference: {ref}")
+
+
+    del model, optimizer, scheduler
     torch.cuda.empty_cache()
 
     return {
@@ -252,7 +278,7 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int,
     folds = np.array_split(shuffled, n_folds)
 
     def sweep_fn():
-        run = wandb.init()
+        run = wandb.init(settings=wandb.Settings(console="off"))
         cfg = deepcopy(base_cfg)
 
         for key, val in run.config.items():
