@@ -342,8 +342,6 @@ def main():
                         help="Max trials this agent will run (default: unlimited)")
     parser.add_argument("--override", nargs="*", metavar="KEY=VALUE",
                         help="Override base config fields (same syntax as train.py)")
-    parser.add_argument("--sweep_id_file", default="tmp/sweep_id.txt",
-                    help="Path to write the created sweep ID to, so other agents can join.")
     args = parser.parse_args()
 
     base_cfg      = load_config(args.config)
@@ -382,10 +380,6 @@ def main():
         sweep_id = wandb.sweep(deepcopy(sweep_config), project=project, entity=entity)
         log.info(f"Created sweep: {sweep_id}")
 
-        if args.sweep_id_file:
-            # write it out so the sbatch script can unblock agent 2
-            with open(args.sweep_id_file, "w") as f:
-                f.write(sweep_id)
 
     wandb.agent(sweep_id, function=sweep_fn, count=args.count,
                 project=project, entity=entity)
