@@ -288,6 +288,8 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int,
     folds = np.array_split(shuffled, n_folds)
 
     def sweep_fn():
+        gc.collect()
+        torch.cuda.empty_cache()
         run = wandb.init(settings=wandb.Settings(console="off"))
         cfg = deepcopy(base_cfg)
 
