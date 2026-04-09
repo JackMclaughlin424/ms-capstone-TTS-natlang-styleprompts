@@ -153,41 +153,48 @@ def wandb_finish(run):
 
 def load_llm(device: str, repo: str = LLM_REPO):
     tokenizer = AutoTokenizer.from_pretrained(repo)
-    model = AutoModelForCausalLM.from_pretrained(repo, dtype=torch.bfloat16)
+    model = AutoModelForCausalLM.from_pretrained(repo, torch_dtype=torch.bfloat16)
     model = model.to(device).eval()
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"   # causal LMs must left-pad for batched generation
     return tokenizer, model
 
 
 
-def query_llm(tokenizer, model, system_prompt, user_prompt, device, max_new_tokens) -> str:
-    # Raw completion format — lets few-shot examples condition the pattern directly
-    # rather than the chat template overriding with instruction-following behavior
-    full_prompt = f"{system_prompt}\n\n---\n\n{user_prompt}"
 
-    inputs = tokenizer(full_prompt, return_tensors="pt").to(device)
-    with torch.no_grad():
-        output_ids = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=True,
-            temperature=0.7,
-            top_p=0.9,
-            pad_token_id=tokenizer.pad_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-        )
+def batch_query_llm(
+    tokenizer, model, full_prompts: list[str], device: str,
+    max_new_tokens: int, batch_size: int = 8
+) -> list[str]:
+    results = []
+    for start in range(0, len(full_prompts), batch_size):
+        batch = full_prompts[start : start + batch_size]
+        inputs = tokenizer(
+            batch,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+        ).to(device)
+        with torch.no_grad():
+            output_ids = model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                do_sample=True,
+                temperature=0.7,
+                top_p=0.9,
+                pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=tokenizer.eos_token_id,
+            )
+        prompt_len = inputs["input_ids"].shape[1]
+        for seq in output_ids:
+            generated = seq[prompt_len:]
+            results.append(tokenizer.decode(generated, skip_special_tokens=True).strip())
+        del inputs, output_ids
+        if device == "cuda":
+            torch.cuda.empty_cache()
+    return results
 
-
-    generated = output_ids[0, inputs["input_ids"].shape[1]:]
-    result = tokenizer.decode(generated, skip_special_tokens=True).strip()
-
-    # free GPU memory from this inference
-    del inputs, output_ids, generated
-    if device == "cuda":
-        torch.cuda.empty_cache()
-
-    return result
 
 
 
@@ -198,6 +205,7 @@ def main(
     num_few_shot: int = 3,
     num_eval_samples: int = 50,
     max_new_tokens: int = 80,
+    inference_batch_size: int = 8,
     max_len_sec: int = 15,
     seed: int = 42,
     llm_repo: str = LLM_REPO,
@@ -255,37 +263,34 @@ def main(
     records = []
 
 
-    for idx, qi in enumerate(query_indices):
+    # build all prompts up front
+    full_prompts, ground_truths, meta = [], [], []
+    for qi in query_indices:
         few_shot_pool   = [i for i in all_indices if i != qi]
         few_shot_chains = [ds[i] for i in random.sample(few_shot_pool, num_few_shot)]
         system_prompt   = build_system_prompt(few_shot_chains)
+        query_chain     = ds[qi]
+        user_prompt     = build_user_prompt(query_chain)
+        full_prompts.append(f"{system_prompt}\n\n---\n\n{user_prompt}")
+        ground_truths.append(query_chain[-1].get("text_description", "").strip())
+        meta.append({"index": qi, "system_prompt": system_prompt, "user_prompt": user_prompt})
 
-        query_chain  = ds[qi]
-        user_prompt  = build_user_prompt(query_chain)
-        prediction   = query_llm(tokenizer, model, system_prompt, user_prompt, device, max_new_tokens)
-        ground_truth = query_chain[-1].get("text_description", "").strip()
+    # batch inference
+    print(f"\nRunning batched inference over {len(full_prompts)} prompts...")
+    predictions = batch_query_llm(tokenizer, model, full_prompts, device
+                                  , max_new_tokens, batch_size=inference_batch_size)
 
-        records.append({
-            "index":        qi,
-            "system_prompt": system_prompt,
-            "user_prompt":  user_prompt,
-            "prediction":   prediction,
-            "ground_truth": ground_truth,
-        })
-
-        # free intermediate objects each iteration
-        del few_shot_chains, system_prompt, user_prompt, query_chain
-
-        if device == "cuda":
-            torch.cuda.empty_cache()
-
-        all_preds.append(prediction)
-        all_refs.append(ground_truth)
-
-
+    # collect results 
+    all_preds, all_refs = [], []
+    records = []
+    for idx, (pred, gt, m) in enumerate(zip(predictions, ground_truths, meta)):
+        records.append({**m, "prediction": pred, "ground_truth": gt})
+        all_preds.append(pred)
+        all_refs.append(gt)
         print(f"\n[{idx+1}/{len(query_indices)}]")
-        print(f"  Predicted : {prediction}")
-        print(f"  Reference : {ground_truth}")
+        print(f"  Predicted : {pred}")
+        print(f"  Reference : {gt}")
+
 
     with open(output_path, "w") as f:
         json.dump(records, f, indent=2)
@@ -317,6 +322,7 @@ def parse_args():
     p.add_argument("--num_few_shot",     type=int,   default=3,      help="Number of in-context examples (default: 3)")
     p.add_argument("--num_eval_samples", type=int,   default=50,     help="Number of query chains to evaluate (default: 50)")
     p.add_argument("--max_new_tokens",   type=int,   default=80,     help="Max tokens to generate per prediction (default: 80)")
+    p.add_argument("--inference_batch_size",   type=int,   default=8,     help="Size of prompt batch to run inference. Adjust for VRAM constraints.")
     p.add_argument("--max_len_sec",      type=int,   default=15,     help="Max audio length in seconds (default: 15)")
     p.add_argument("--llm_repo", type=str, default=LLM_REPO, help="HuggingFace repo for the LLM (default: Llama 3.2 3B)")
 
