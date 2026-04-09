@@ -7,6 +7,7 @@ then predicts the style for a query chain's final utterance.
 import os
 import json
 import random
+import gc
 import textwrap
 import argparse
 import numpy as np
@@ -190,7 +191,9 @@ def batch_query_llm(
         for seq in output_ids:
             generated = seq[prompt_len:]
             results.append(tokenizer.decode(generated, skip_special_tokens=True).strip())
+        
         del inputs, output_ids
+        gc.collect()
         if device == "cuda":
             torch.cuda.empty_cache()
     return results
