@@ -219,7 +219,7 @@ def run_epoch(
             if not use_tqdm and n_batches % log_interval == 0:
                 log.info(f"{tag} epoch {epoch}  batch {n_batches}/{n_total}  loss {loss.item():.4f}")
 
- 
+
     avg = total_loss / max(n_batches, 1)
     log.info(f"{tag} epoch {epoch} avg loss: {avg:.4f}")
     return avg, global_step
