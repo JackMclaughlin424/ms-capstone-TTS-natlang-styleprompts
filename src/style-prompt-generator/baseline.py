@@ -109,7 +109,7 @@ def build_system_prompt(few_shot_chains: list[list]) -> str:
 
 
 def build_user_prompt(query_chain: list) -> str:
-    dialogue_block = chain_to_text(query_chain, include_last_style=False)
+    dialogue_block = chain_to_text(query_chain)
     return (
         "Given the dialogue history and the script for the final turn, "
         "predict only the final style description.\n\n"
