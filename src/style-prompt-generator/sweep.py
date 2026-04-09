@@ -93,6 +93,7 @@ def _train_fold(
     fold_idx: int,
     sweep_run,              # the W&B run owned by the sweep agent
     device: torch.device,
+    global_step: int
 ) -> dict:
     """Train one fold; return dict with best-epoch metrics."""
     set_seed(cfg["seed"] + fold_idx)  # each fold gets a distinct but reproducible seed
@@ -105,7 +106,7 @@ def _train_fold(
     
 
     best: dict = {"val_loss": float("inf"), "epoch": -1}
-    global_step = 0
+    
     fp = f"fold_{fold_idx}"
 
     patience         = cfg.get("early_stopping_patience", 3)
@@ -201,7 +202,7 @@ def _train_fold(
         "val_loss":     best["val_loss"],
         "bertscore_f1": bs["bertscore_f1_mean"],
         "meteor":       met["meteor_mean"],
-    }
+    }, global_step
 
 def _train_final_and_eval_test(
     cfg: dict,
@@ -320,12 +321,13 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int,
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        global_step = 0
         fold_metrics = []
         for fold_idx in range(n_folds):
             log.info(f"=== Fold {fold_idx + 1}/{n_folds} ===")
             val_ids   = set(folds[fold_idx])
             train_ids = set(np.concatenate([folds[j] for j in range(n_folds) if j != fold_idx]))
-            metrics   = _train_fold(cfg, train_ids, val_ids, fold_idx, run, device)
+            metrics, global_step   = _train_fold(cfg, train_ids, val_ids, fold_idx, run, device, global_step)
             fold_metrics.append(metrics)
             log.info(
                 f"Fold {fold_idx + 1}  val_loss={metrics['val_loss']:.4f}  "
@@ -362,7 +364,7 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int,
         })
 
         run.summary.update(summary)
-        wandb_log(summary, step=0, run=run)
+        wandb_log(summary, step=global_step, run=run)
         log.info(
             f"CV summary  mean_val_loss={summary['cv/mean_val_loss']:.4f} "
             f"(±{summary['cv/std_val_loss']:.4f})  "

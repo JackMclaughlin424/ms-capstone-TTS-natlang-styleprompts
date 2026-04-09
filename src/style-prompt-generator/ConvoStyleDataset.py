@@ -57,9 +57,10 @@ class ConvoStyleDataset(Dataset):
         # index by relative_audio_path so prev_filename lookups are O(1)
         self._path_to_row = meta.set_index("relative_audio_path")
 
-        # anchor rows are the "last" turn in each chain we want to load
-        anchors = meta[meta["turn_index"] >= (num_turns - 1)].reset_index(drop=True)
-
+        # anchor rows are the "last" turn in each chain we want to load, and they must have audio
+        anchors = meta[
+            (meta["turn_index"] >= (num_turns - 1)) & (meta["hdf5_idx"] >= 0) # audio only
+        ].reset_index(drop=True)
         # resolve every anchor into a full chain, drop any with broken links
         if meta_columns is not None:
             # always keep the fields we need for chain walking + audio loading
