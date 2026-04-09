@@ -151,7 +151,7 @@ def _train_fold(
 
     # compute text-quality metrics once, on the final model state
     model.eval()
-    all_preds, all_refs, all_texts = [], [], []
+    all_preds, all_refs, all_texts, all_vecs = [], [], [], []
 
     with torch.no_grad():
         for batch in val_loader:
@@ -168,6 +168,7 @@ def _train_fold(
                 ctx = model.scfa(audio, lengths, texts, speaker_ids, text_only)
                 vec = model.pooler(ctx)
                 del ctx
+                all_vecs.append(vec.float().detach().cpu())  # collect before delete
                 preds = model.style_generator.generate(vec)
                 del vec
             
@@ -180,6 +181,26 @@ def _train_fold(
     del model, optimizer, scheduler
     gc.collect()
     torch.cuda.empty_cache()
+
+    # collapse diagnostics on pooled dialogue vectors
+    vecs = torch.cat(all_vecs, dim=0)               # (N, 4*d_model)
+    vec_std      = vecs.std(dim=0).mean().item()     # near 0 = collapsed
+    vec_norm_cv  = (vecs.norm(dim=-1).std() /
+                    vecs.norm(dim=-1).mean()).item()  # coeff of variation of norms
+
+    # pairwise cosine similarity — mean off-diagonal → 1.0 = fully collapsed
+    normed   = torch.nn.functional.normalize(vecs, dim=-1)
+    sim_mat  = normed @ normed.T
+    n        = sim_mat.shape[0]
+    off_diag = sim_mat[~torch.eye(n, dtype=torch.bool)].mean().item()
+
+    wandb_log({
+        f"{fp}/vec_std":          vec_std,
+        f"{fp}/vec_norm_cv":      vec_norm_cv,
+        f"{fp}/mean_cosine_sim":  off_diag,   # target: low (< 0.5); alarm: > 0.9
+    }, step=global_step, run=sweep_run)
+    del all_vecs, vecs
+
 
     bs  = compute_bertscore(all_preds, all_refs, device=str(device))
     met = compute_meteor(all_preds, all_refs)
