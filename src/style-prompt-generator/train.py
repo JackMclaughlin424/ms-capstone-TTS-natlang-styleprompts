@@ -165,7 +165,7 @@ def _grad_norm(model: nn.Module) -> float:
 
 def run_epoch(
     model, loader, optimizer, scheduler, 
-    device, cfg, epoch, global_step, wandb_run
+    device, cfg, epoch, global_step, wandb_run, log_handler=log
     , is_train=True, use_tqdm=True
 ) -> tuple[float, int]:
     model.train(is_train)
@@ -202,7 +202,7 @@ def run_epoch(
                     lr = scheduler.get_last_lr()[0]
                     grad_norm = _grad_norm(model)
                     run = f"[{cfg['run_name']}] " if cfg["run_name"] else ""
-                    log.info(
+                    log_handler.info(
                         f"{run}epoch {epoch}  step {global_step}  "
                         f"loss {loss.item():.4f}  lr {lr:.2e}  grad_norm {grad_norm:.3f}"
                     )
@@ -217,11 +217,11 @@ def run_epoch(
             n_batches  += 1
 
             if not use_tqdm and n_batches % log_interval == 0:
-                log.info(f"{tag} epoch {epoch}  batch {n_batches}/{n_total}  loss {loss.item():.4f}")
+                log_handler.info(f"{tag} epoch {epoch}  batch {n_batches}/{n_total}  loss {loss.item():.4f}")
 
-
+ 
     avg = total_loss / max(n_batches, 1)
-    log.info(f"{tag} epoch {epoch} avg loss: {avg:.4f}")
+    log_handler.info(f"{tag} epoch {epoch} avg loss: {avg:.4f}")
     return avg, global_step
 
 
@@ -408,9 +408,6 @@ def parse_args():
 
     p.add_argument("--no-resume", action="store_true", help="Ignore existing checkpoints and train from scratch")
     return p.parse_args()
-
-
-
 
 
 if __name__ == "__main__":

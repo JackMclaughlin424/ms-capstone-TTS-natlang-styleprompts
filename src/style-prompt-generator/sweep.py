@@ -115,7 +115,7 @@ def _train_fold(
     for epoch in range(cfg["num_epochs"]):
         train_loss, global_step = run_epoch(
             model, train_loader, optimizer, scheduler,
-            device, cfg, epoch, global_step, wandb_run=None
+            device, cfg, epoch, global_step, wandb_run=None, log_handler=log
             , is_train=True, use_tqdm=False
         )
 
@@ -124,7 +124,7 @@ def _train_fold(
 
         val_loss, _ = run_epoch(
             model, val_loader, optimizer, scheduler,
-            device, cfg, epoch, global_step, wandb_run=None
+            device, cfg, epoch, global_step, wandb_run=None, log_handler=log
             , is_train=False, use_tqdm=False
         )
 
@@ -223,13 +223,13 @@ def _train_final_and_eval_test(
     for epoch in range(cfg["num_epochs"]):
         _, global_step = run_epoch(
             model, train_loader, optimizer, scheduler, 
-            device, cfg, epoch, global_step, wandb_run=None
+            device, cfg, epoch, global_step, wandb_run=None, log_handler=log
             , is_train=True, use_tqdm=False
         )
 
     test_loss, _ = run_epoch(
         model, test_loader, optimizer, scheduler, 
-        device, cfg, 0, global_step, wandb_run=None
+        device, cfg, 0, global_step, wandb_run=None, log_handler=log
         , is_train=False, use_tqdm=False
     )
 
