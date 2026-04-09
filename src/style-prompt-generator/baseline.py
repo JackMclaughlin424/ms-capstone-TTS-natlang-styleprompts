@@ -240,20 +240,28 @@ def main(
     test_ids = set(shuffled_all[:n_test])
     print(f"  Test split: {len(test_ids)} conv_ids (10% held-out, seed={seed})")
 
-    all_indices = [
-        i for i, chain in enumerate(ds._chains)
-        if chain[-1].get("conv_id") in test_ids           # same held-out split as sweep
-        and all(
+    def has_valid_styles(chain):
+        return all(
             chain_row.get("text_description") not in (None, "")
             and not (isinstance(chain_row.get("text_description"), float) and np.isnan(chain_row.get("text_description")))
             for chain_row in chain
         )
+
+    # eval pool: test split only
+    test_indices = [
+        i for i, chain in enumerate(ds._chains)
+        if chain[-1].get("conv_id") in test_ids and has_valid_styles(chain)
     ]
 
+    # few-shot pool: train split only, so no eval chain leaks into context
+    train_indices = [
+        i for i, chain in enumerate(ds._chains)
+        if chain[-1].get("conv_id") not in test_ids and has_valid_styles(chain)
+    ]
 
-    query_indices = random.sample(all_indices, min(num_eval_samples, len(all_indices)))
-
+    query_indices = random.sample(test_indices, min(num_eval_samples, len(test_indices)))
     print(f"\n{len(query_indices)} query chains sampled for evaluation.")
+    print(f"  Few-shot pool size: {len(train_indices)} train chains")
 
     print(f"\nLoading LLM on {device}...")
     tokenizer, model = load_llm(device, repo=llm_repo)
@@ -273,18 +281,17 @@ def main(
     records = []
 
 
-    # build all prompts up front
+     # build all prompts up front
     full_prompts, ground_truths, meta = [], [], []
     for qi in query_indices:
-        few_shot_pool   = [i for i in all_indices if i != qi]
-        few_shot_chains = [ds[i] for i in random.sample(few_shot_pool, num_few_shot)]
+        few_shot_chains = [ds[i] for i in random.sample(train_indices, num_few_shot)]
         system_prompt   = build_system_prompt(few_shot_chains)
         query_chain     = ds[qi]
         user_prompt     = build_user_prompt(query_chain)
         full_prompts.append(f"{system_prompt}\n\n---\n\n{user_prompt}")
         ground_truths.append(query_chain[-1].get("text_description", "").strip())
         meta.append({"index": qi, "system_prompt": system_prompt, "user_prompt": user_prompt})
-
+        
     # batch inference
     print(f"\nRunning batched inference over {len(full_prompts)} prompts...")
     predictions = batch_query_llm(tokenizer, model, full_prompts, device
