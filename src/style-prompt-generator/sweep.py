@@ -153,14 +153,21 @@ def _train_fold(
                 if cfg["num_turns"] == 0:
                     audio     = torch.zeros_like(audio)
                     text_only = torch.ones_like(text_only)
-                ctx   = model.scfa(audio, lengths, texts, speaker_ids, text_only)
-                vec   = model.pooler(ctx)
-            preds = model.style_generator.generate(vec)
+                ctx = model.scfa(audio, lengths, texts, speaker_ids, text_only)
+                vec = model.pooler(ctx)
+                del ctx
+                preds = model.style_generator.generate(vec)
+                del vec
             
             all_preds.extend(preds)
             all_refs.extend([chain[-1] for chain in targets])
             all_texts.extend(texts)
 
+    # free GPU memory before the next fold loads a fresh model
+    del train_loader, val_loader
+    del model, optimizer, scheduler
+    gc.collect()
+    torch.cuda.empty_cache()
 
     bs  = compute_bertscore(all_preds, all_refs, device=str(device))
     met = compute_meteor(all_preds, all_refs)
@@ -176,11 +183,9 @@ def _train_fold(
         log.info(f"    Predicted: {pred}")
         log.info(f"    Reference: {ref}")
 
-
-    # free GPU memory before the next fold loads a fresh model
-    del model, optimizer, scheduler
-    torch.cuda.empty_cache()
-
+    gc.collect()
+    torch.cuda.empty_cache()  # reclaim BERTScore model memory before next fold loads
+    
     return {
         "val_loss":     best["val_loss"],
         "bertscore_f1": bs["bertscore_f1_mean"],
@@ -238,6 +243,12 @@ def _train_final_and_eval_test(
                 all_refs.extend([chain[-1] for chain in targets])
                 all_texts.extend(texts)
 
+    # memory management
+    del train_loader, test_loader
+    del model, optimizer, scheduler
+    gc.collect()
+    torch.cuda.empty_cache()
+
     bs  = compute_bertscore(all_preds, all_refs, device=str(device))
     met = compute_meteor(all_preds, all_refs)
 
@@ -253,10 +264,9 @@ def _train_final_and_eval_test(
         log.info(f"    Predicted: {pred}")
         log.info(f"    Reference: {ref}")
 
-
-    del model, optimizer, scheduler
-    torch.cuda.empty_cache()
-
+    gc.collect()
+    torch.cuda.empty_cache()  # reclaim BERTScore model memory before next fold loads
+    
     return {
         "test_loss":     test_loss,
         "bertscore_f1":  bs["bertscore_f1_mean"],
@@ -349,7 +359,7 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int,
     return sweep_fn
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# Entry point
 
 def main():
     parser = argparse.ArgumentParser(
