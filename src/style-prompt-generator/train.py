@@ -165,19 +165,23 @@ def _grad_norm(model: nn.Module) -> float:
 
 def run_epoch(
     model, loader, optimizer, scheduler, 
-    device, cfg, epoch, global_step, wandb_run, is_train=True,
+    device, cfg, epoch, global_step, wandb_run
+    , is_train=True, use_tqdm=True
 ) -> tuple[float, int]:
     model.train(is_train)
     total_loss = 0.0
     n_batches  = 0
     tag = "TRAIN" if is_train else "VAL"
+
+    n_total = len(loader)
+    log_interval = max(1, n_total // 5)  # log ~5 times per epoch
  
     ctx = torch.enable_grad if is_train else torch.no_grad
  
     with ctx():
-        pbar = tqdm(loader, desc=f"{tag} epoch {epoch}", unit="batch", leave=True, dynamic_ncols=True)
+        iterable = tqdm(loader, desc=f"{tag} epoch {epoch}", unit="batch", leave=True, dynamic_ncols=True) if use_tqdm else loader
 
-        for batch in pbar:
+        for batch in iterable:
             with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
                 loss = compute_loss(model, batch, device, cfg)
  
@@ -211,6 +215,10 @@ def run_epoch(
  
             total_loss += loss.item()
             n_batches  += 1
+
+            if not use_tqdm and n_batches % log_interval == 0:
+                log.info(f"{tag} epoch {epoch}  batch {n_batches}/{n_total}  loss {loss.item():.4f}")
+
  
     avg = total_loss / max(n_batches, 1)
     log.info(f"{tag} epoch {epoch} avg loss: {avg:.4f}")

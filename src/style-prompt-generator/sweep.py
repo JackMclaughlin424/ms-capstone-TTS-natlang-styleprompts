@@ -25,6 +25,7 @@ import pandas as pd
 import torch
 import wandb
 import json
+import os
 
 from train_helpers import (
     load_config, apply_overrides, set_seed,
@@ -41,6 +42,14 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 log = logging.getLogger(__name__)
+
+# write our logs to a file independent of wandb's stderr capture
+_log_file = os.environ.get("SLURM_JOB_LOG", "sweep_run.log")
+_fh = logging.FileHandler(_log_file, mode="a")
+_fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s", datefmt="%H:%M:%S"))
+logging.getLogger().addHandler(_fh)
+
+
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("transformers").setLevel(logging.WARNING)
 logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
@@ -106,7 +115,8 @@ def _train_fold(
     for epoch in range(cfg["num_epochs"]):
         train_loss, global_step = run_epoch(
             model, train_loader, optimizer, scheduler,
-            device, cfg, epoch, global_step, wandb_run=None, is_train=True,
+            device, cfg, epoch, global_step, wandb_run=None
+            , is_train=True, use_tqdm=False
         )
 
         if (epoch + 1) % cfg["eval_every_n_epochs"] != 0:
@@ -114,7 +124,8 @@ def _train_fold(
 
         val_loss, _ = run_epoch(
             model, val_loader, optimizer, scheduler,
-            device, cfg, epoch, global_step, wandb_run=None, is_train=False,
+            device, cfg, epoch, global_step, wandb_run=None
+            , is_train=False, use_tqdm=False
         )
 
         wandb_log({
@@ -212,12 +223,14 @@ def _train_final_and_eval_test(
     for epoch in range(cfg["num_epochs"]):
         _, global_step = run_epoch(
             model, train_loader, optimizer, scheduler, 
-            device, cfg, epoch, global_step, wandb_run=None, is_train=True,
+            device, cfg, epoch, global_step, wandb_run=None
+            , is_train=True, use_tqdm=False
         )
 
     test_loss, _ = run_epoch(
         model, test_loader, optimizer, scheduler, 
-        device, cfg, 0, global_step, wandb_run=None, is_train=False,
+        device, cfg, 0, global_step, wandb_run=None
+        , is_train=False, use_tqdm=False
     )
 
     model.eval()
