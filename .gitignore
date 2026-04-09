@@ -9,7 +9,7 @@ logs/
 __pycache__
 .vscode
 
-
+inference_outputs/
 
 src/eda/gaps.csv
 

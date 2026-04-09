@@ -44,18 +44,24 @@ def load_dataset(h5_path: str, meta_path: str, num_turns: int, max_len_sec: int)
 
 
 
-def chain_to_text(chain: list, include_last_style: bool = True) -> str:
+def chain_to_text(chain: list) -> str:
     lines = []
     for i, utt in enumerate(chain):
         speaker = utt.get("speakerid", f"Speaker{i}")
         text    = utt.get("transcription", "").strip()
         is_last = i == len(chain) - 1
 
-        lines.append(f"[Turn {i+1}] {speaker}: \"{text}\"")
+        lines.append(f"[Turn {i+1}] {speaker}:")
+        lines.append(f"  Transcription: \"{text}\"")
         if is_last:
-            lines.append(f"  -> Style: ???")
+            lines.append(f"  Speaking style:")  # model completes here
+        else:
+            style = (utt.get("text_description") or "unknown").strip()
+            lines.append(f"  Speaking style: {style}")
 
     return "\n".join(lines)
+
+
 
 
 
@@ -64,14 +70,15 @@ def build_few_shot_example(chain: list) -> str:
     for i, utt in enumerate(chain):
         speaker = utt.get("speakerid", f"Speaker{i}")
         text    = utt.get("transcription", "").strip()
+        style   = (utt.get("text_description") or "unknown").strip()
         is_last = i == len(chain) - 1
 
-        lines.append(f"[Turn {i+1}] {speaker}: \"{text}\"")
-        if is_last:
-            style = (utt.get("text_description") or "unknown").strip()
-            lines.append(f"  -> Style: {style}")
+        lines.append(f"[Turn {i+1}] {speaker}:")
+        lines.append(f"  Transcription: \"{text}\"")
+        lines.append(f"  Speaking style: {style}")
 
     return "\n".join(lines)
+
 
 
 
@@ -85,9 +92,11 @@ def build_system_prompt(few_shot_chains: list[list]) -> str:
         speaking rate, vocal quality, and energy level -- and should be consistent with the speaker's
         established style, and be appropriate to the conversational flow. Be concise: 1-3 sentences is ideal.
 
-        Each turn shows the speaker and their transcription.
-        For the final turn, predict the style and output it as "Style: <your prediction>".
+        Each turn shows the speaker, their transcription, and (for all turns except the final query turn) their speaking style.
+        For the final turn, only the transcription is provided.
+        Predict the style for that final turn and output it as "Style: <your prediction>".
         Respond with only the style description for the final turn, nothing else.
+
     """)
 
 
@@ -103,9 +112,8 @@ def build_user_prompt(query_chain: list) -> str:
     dialogue_block = chain_to_text(query_chain, include_last_style=False)
     return (
         "Given the dialogue history and the script for the final turn, "
-        "predict the style description.\n\n"
+        "predict only the final style description.\n\n"
         f"{dialogue_block}\n"
-        "  -> Style:"  # exact match to few-shot example format; model completes here
     )
 
 
