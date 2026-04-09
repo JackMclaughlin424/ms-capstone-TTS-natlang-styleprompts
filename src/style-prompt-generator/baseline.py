@@ -47,14 +47,13 @@ def load_dataset(h5_path: str, meta_path: str, num_turns: int, max_len_sec: int)
 def chain_to_text(chain: list) -> str:
     lines = []
     for i, utt in enumerate(chain):
-        speaker = utt.get("speakerid", f"Speaker{i}")
         text    = utt.get("transcription", "").strip()
         is_last = i == len(chain) - 1
 
-        lines.append(f"[Turn {i+1}] {speaker}:")
+        lines.append(f"[Turn {i+1}]")
         lines.append(f"  Transcription: \"{text}\"")
         if is_last:
-            lines.append(f"  Speaking style:")  # model completes here
+            lines.append(f"  Speaking style:")
         else:
             style = (utt.get("text_description") or "unknown").strip()
             lines.append(f"  Speaking style: {style}")
@@ -65,19 +64,19 @@ def chain_to_text(chain: list) -> str:
 
 
 
+
 def build_few_shot_example(chain: list) -> str:
     lines = []
     for i, utt in enumerate(chain):
-        speaker = utt.get("speakerid", f"Speaker{i}")
-        text    = utt.get("transcription", "").strip()
-        style   = (utt.get("text_description") or "unknown").strip()
-        is_last = i == len(chain) - 1
+        text  = utt.get("transcription", "").strip()
+        style = (utt.get("text_description") or "unknown").strip()
 
-        lines.append(f"[Turn {i+1}] {speaker}:")
+        lines.append(f"[Turn {i+1}]")
         lines.append(f"  Transcription: \"{text}\"")
         lines.append(f"  Speaking style: {style}")
 
     return "\n".join(lines)
+
 
 
 
@@ -92,10 +91,10 @@ def build_system_prompt(few_shot_chains: list[list]) -> str:
         speaking rate, vocal quality, and energy level -- and should be consistent with the speaker's
         established style, and be appropriate to the conversational flow. Be concise: 1-3 sentences is ideal.
 
-        Each turn shows the speaker, their transcription, and (for all turns except the final query turn) their speaking style.
+        Each turn shows the transcription, and (for all turns except the final query turn) the speaking style.
         For the final turn, only the transcription is provided.
         Predict the style for that final turn and output it as "Style: <your prediction>".
-        Respond with only the style description for the final turn, nothing else.
+        Respond with only the content of your style prediction for the final turn, nothing else.
 
     """)
 
@@ -162,7 +161,7 @@ def wandb_finish(run):
 
 def load_llm(device: str, repo: str = LLM_REPO):
     tokenizer = AutoTokenizer.from_pretrained(repo)
-    model = AutoModelForCausalLM.from_pretrained(repo, torch_dtype=torch.bfloat16)
+    model = AutoModelForCausalLM.from_pretrained(repo, dtype=torch.bfloat16)
     model = model.to(device).eval()
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
