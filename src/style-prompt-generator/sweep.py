@@ -111,6 +111,7 @@ def _train_fold(
 
     patience         = cfg.get("early_stopping_patience", 3)
     min_delta        = cfg.get("early_stopping_min_delta", 1e-4)
+    MIN_EPOCH        = 5
     epochs_no_improve = 0
 
     for epoch in range(cfg["num_epochs"]):
@@ -139,10 +140,10 @@ def _train_fold(
             best["val_loss"] = val_loss
             best["epoch"]    = epoch
             epochs_no_improve = 0
-        else:
+        elif patience > 0 and epoch >= MIN_EPOCH:
             epochs_no_improve += 1
 
-        if patience > 0 and epochs_no_improve >= patience:
+        if patience > 0 and epoch >= MIN_EPOCH and epochs_no_improve >= patience:
             log.info(f"  Fold {fold_idx}: early stop at epoch {epoch} (no improvement for {patience} evals)")
             break
 
