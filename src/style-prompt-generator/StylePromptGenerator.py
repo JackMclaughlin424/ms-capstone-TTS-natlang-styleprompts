@@ -109,6 +109,9 @@ class StylePromptGenerator(nn.Module):
         self.style_head     = style_head
         self.tokenizer      = tokenizer
         self.llm            = llm
+        # Silence the do_sample=False vs temperature/top_p conflict in GenerationConfig
+        self.llm.generation_config.temperature = None
+        self.llm.generation_config.top_p = None
         self.system_prompt  = system_prompt
         self.max_new_tokens = max_new_tokens
         self.max_prompt_tokens = max_prompt_tokens
@@ -151,6 +154,8 @@ class StylePromptGenerator(nn.Module):
             attention_mask=attention_mask,
             max_new_tokens=self.max_new_tokens,
             do_sample=False,
+            temperature=None,
+            top_p=None,
             pad_token_id=self.tokenizer.pad_token_id,
             eos_token_id=self.tokenizer.eos_token_id,
         )

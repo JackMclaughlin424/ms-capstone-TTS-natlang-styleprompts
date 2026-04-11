@@ -93,6 +93,7 @@ def _train_fold(
     fold_idx: int,
     sweep_run,              # the W&B run owned by the sweep agent
     device: torch.device,
+    global_step: int
 ) -> dict:
     """Train one fold; return dict with best-epoch metrics."""
     set_seed(cfg["seed"] + fold_idx)  # each fold gets a distinct but reproducible seed
@@ -105,11 +106,12 @@ def _train_fold(
     
 
     best: dict = {"val_loss": float("inf"), "epoch": -1}
-    global_step = 0
+    
     fp = f"fold_{fold_idx}"
 
     patience         = cfg.get("early_stopping_patience", 3)
     min_delta        = cfg.get("early_stopping_min_delta", 1e-4)
+    MIN_EPOCH        = 5
     epochs_no_improve = 0
 
     for epoch in range(cfg["num_epochs"]):
@@ -138,10 +140,10 @@ def _train_fold(
             best["val_loss"] = val_loss
             best["epoch"]    = epoch
             epochs_no_improve = 0
-        else:
+        elif patience > 0 and epoch >= MIN_EPOCH:
             epochs_no_improve += 1
 
-        if patience > 0 and epochs_no_improve >= patience:
+        if patience > 0 and epoch >= MIN_EPOCH and epochs_no_improve >= patience:
             log.info(f"  Fold {fold_idx}: early stop at epoch {epoch} (no improvement for {patience} evals)")
             break
 
@@ -150,7 +152,7 @@ def _train_fold(
 
     # compute text-quality metrics once, on the final model state
     model.eval()
-    all_preds, all_refs, all_texts = [], [], []
+    all_preds, all_refs, all_texts, all_vecs = [], [], [], []
 
     with torch.no_grad():
         for batch in val_loader:
@@ -167,6 +169,7 @@ def _train_fold(
                 ctx = model.scfa(audio, lengths, texts, speaker_ids, text_only)
                 vec = model.pooler(ctx)
                 del ctx
+                all_vecs.append(vec.float().detach().cpu())  # collect before delete
                 preds = model.style_generator.generate(vec)
                 del vec
             
@@ -179,6 +182,26 @@ def _train_fold(
     del model, optimizer, scheduler
     gc.collect()
     torch.cuda.empty_cache()
+
+    # collapse diagnostics on pooled dialogue vectors
+    vecs = torch.cat(all_vecs, dim=0)               # (N, 4*d_model)
+    vec_std      = vecs.std(dim=0).mean().item()     # near 0 = collapsed
+    vec_norm_cv  = (vecs.norm(dim=-1).std() /
+                    vecs.norm(dim=-1).mean()).item()  # coeff of variation of norms
+
+    # pairwise cosine similarity — mean off-diagonal → 1.0 = fully collapsed
+    normed   = torch.nn.functional.normalize(vecs, dim=-1)
+    sim_mat  = normed @ normed.T
+    n        = sim_mat.shape[0]
+    off_diag = sim_mat[~torch.eye(n, dtype=torch.bool)].mean().item()
+
+    wandb_log({
+        f"{fp}/vec_std":          vec_std,
+        f"{fp}/vec_norm_cv":      vec_norm_cv,
+        f"{fp}/mean_cosine_sim":  off_diag,   # target: low (< 0.5); alarm: > 0.9
+    }, step=global_step, run=sweep_run)
+    del all_vecs, vecs
+
 
     bs  = compute_bertscore(all_preds, all_refs, device=str(device))
     met = compute_meteor(all_preds, all_refs)
@@ -202,7 +225,7 @@ def _train_fold(
         "best_epoch":   best["epoch"],
         "bertscore_f1": bs["bertscore_f1_mean"],
         "meteor":       met["meteor_mean"],
-    }
+    }, global_step
 
 
 def _train_final_and_eval_test(
@@ -322,12 +345,13 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int,
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        global_step = 0
         fold_metrics = []
         for fold_idx in range(n_folds):
             log.info(f"=== Fold {fold_idx + 1}/{n_folds} ===")
             val_ids   = set(folds[fold_idx])
             train_ids = set(np.concatenate([folds[j] for j in range(n_folds) if j != fold_idx]))
-            metrics   = _train_fold(cfg, train_ids, val_ids, fold_idx, run, device)
+            metrics, global_step   = _train_fold(cfg, train_ids, val_ids, fold_idx, run, device, global_step)
             fold_metrics.append(metrics)
             log.info(
                 f"Fold {fold_idx + 1}  val_loss={metrics['val_loss']:.4f}  "
@@ -368,7 +392,7 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int,
         })
 
         run.summary.update(summary)
-        wandb_log(summary, step=0, run=run)
+        wandb_log(summary, step=global_step, run=run)
         log.info(
             f"CV summary  mean_val_loss={summary['cv/mean_val_loss']:.4f} "
             f"(±{summary['cv/std_val_loss']:.4f})  "
