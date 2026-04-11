@@ -8,6 +8,8 @@
     "num_turns": 5,
     "sample_rate": 16000,
     "max_len_sec": 15,
+    "data_source": "both",
+    "max_test_convos": 500,
     "_comment_param_section_encoder": "the following parameters pertain to the dialouge encoder model",
     "num_unfrozen_bert": 1,
     "num_unfrozen_wavlm": 1,

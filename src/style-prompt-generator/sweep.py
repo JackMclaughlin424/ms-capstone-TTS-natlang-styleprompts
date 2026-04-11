@@ -59,8 +59,42 @@ logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 
 # Data helpers 
 
-def _get_conv_ids(meta_path: str) -> np.ndarray:
-    return np.array(pd.read_parquet(meta_path)["conv_id"].unique())
+def _get_conv_ids(meta_path: str, data_source: str = "both") -> np.ndarray:
+    meta = pd.read_parquet(meta_path)
+    if data_source != "both":
+        meta = meta[meta["source"] == data_source]
+    return np.array(meta["conv_id"].unique())
+
+
+def _carve_data_splits(all_conv_ids: np.ndarray, base_cfg: dict, data_source: str = "both"):
+    if data_source != "both":
+        other_source  = "styletalk" if data_source == "expresso" else "expresso"
+        other_ids     = _get_conv_ids(base_cfg["meta_path"], other_source)
+        max_test      = base_cfg.get("max_test_convos")
+        if max_test is not None:
+            rng_test  = np.random.default_rng(base_cfg["seed"])
+            rng_test.shuffle(other_ids)
+            other_ids = other_ids[:max_test]
+        test_ids     = set(other_ids)
+        trainval_ids = all_conv_ids
+        log.info(
+            f"{len(trainval_ids)} {data_source} conversations for train/val  |  "
+            f"{len(test_ids)} {other_source} conversations for test (cross-dataset)"
+        )
+    else:
+        # carve out a 10% held-out test split before any fold construction
+        rng_split    = np.random.default_rng(base_cfg["seed"])
+        shuffled_all = all_conv_ids.copy()
+        rng_split.shuffle(shuffled_all)
+        n_test       = max(1, int(len(shuffled_all) * 0.10))
+        test_ids     = set(shuffled_all[:n_test])
+        trainval_ids = shuffled_all[n_test:]
+        log.info(
+            f"{len(all_conv_ids)} unique conversations → "
+            f"{len(trainval_ids)} train/val  |  {len(test_ids)} test (held-out)"
+        )
+
+    return trainval_ids, test_ids
 
 
 
@@ -431,21 +465,12 @@ def main():
     with open(args.sweep_values) as f:
         sweep_config = json.load(f)
 
+    # get data splits, keeping conversations independent in test and train splits
+    data_source  = base_cfg.get("data_source", "both")
+    all_conv_ids = _get_conv_ids(base_cfg["meta_path"], data_source)
+    trainval_ids, test_ids = _carve_data_splits(all_conv_ids, base_cfg)
 
-    all_conv_ids = _get_conv_ids(base_cfg["meta_path"])
-
-    # carve out a 10% held-out test split before any fold construction
-    rng_split = np.random.default_rng(base_cfg["seed"])
-    shuffled_all = all_conv_ids.copy()
-    rng_split.shuffle(shuffled_all)
-    n_test       = max(1, int(len(shuffled_all) * 0.10))
-    test_ids     = set(shuffled_all[:n_test])
-    trainval_ids = shuffled_all[n_test:]
-    log.info(
-        f"{len(all_conv_ids)} unique conversations → "
-        f"{len(trainval_ids)} train/val  |  {len(test_ids)} test (held-out)"
-    )
-
+    # build sweep function
     sweep_fn = _make_sweep_fn(base_cfg, args.n_folds, trainval_ids, test_ids)
 
 
