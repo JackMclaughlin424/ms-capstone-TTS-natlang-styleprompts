@@ -209,7 +209,8 @@ def run_epoch(
                         elapsed = time.time() - epoch_start
                         secs_per_batch = elapsed / batches_done
                         remaining = (n_total - batches_done) * secs_per_batch
-                        eta_str = f"  eta {remaining / 60:.1f}m"
+                        fmt = lambda s: f"{int(s)//60:02d}:{int(s)%60:02d}"
+                        eta_str = f"  {fmt(elapsed)}<{fmt(remaining)}"
 
                     log_handler.info(
                         f"{run}epoch {epoch} - batch {n_batches + 1}/{n_total} - step {global_step} | "
