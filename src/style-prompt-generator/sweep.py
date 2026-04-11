@@ -26,6 +26,7 @@ import torch
 import wandb
 import json
 import os
+import time
 
 from train_helpers import (
     load_config, apply_overrides, set_seed,
@@ -148,6 +149,7 @@ def _train_fold(
     MIN_EPOCH        = 5
     epochs_no_improve = 0
 
+    fold_start_time = time.time()
     for epoch in range(cfg["num_epochs"]):
         train_loss, global_step = run_epoch(
             model, train_loader, optimizer, scheduler,
@@ -183,6 +185,12 @@ def _train_fold(
 
         gc.collect()
 
+    elapsed = time.time() - fold_start_time
+    fmt = lambda s: f"{int(s)//60:02d}:{int(s)%60:02d}"
+    log.info(
+        f"Fold {fold_idx}: Trained for {epoch} epochs. Total time: {fmt(elapsed)}"
+        f"\nBeginning validation..."
+    )
 
     # compute text-quality metrics once, on the final model state
     model.eval()
