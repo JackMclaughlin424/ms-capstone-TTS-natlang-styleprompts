@@ -174,7 +174,6 @@ def run_epoch(
     tag = "TRAIN" if is_train else "VAL"
 
     n_total = len(loader)
-    log_interval = max(1, n_total // 5)  # log ~5 times per epoch
  
     ctx = torch.enable_grad if is_train else torch.no_grad
  
@@ -202,6 +201,10 @@ def run_epoch(
                     lr = scheduler.get_last_lr()[0]
                     grad_norm = _grad_norm(model)
                     run = f"[{cfg['run_name']}] " if cfg["run_name"] else ""
+
+                    if not use_tqdm:
+                        log_handler.info(f"{tag} epoch {epoch}  batch {n_batches}/{n_total}  loss {loss.item():.4f}")
+
                     log_handler.info(
                         f"{run}epoch {epoch}  step {global_step}  "
                         f"loss {loss.item():.4f}  lr {lr:.2e}  grad_norm {grad_norm:.3f}"
@@ -216,9 +219,7 @@ def run_epoch(
             total_loss += loss.item()
             n_batches  += 1
 
-            if not use_tqdm and n_batches % log_interval == 0:
-                log_handler.info(f"{tag} epoch {epoch}  batch {n_batches}/{n_total}  loss {loss.item():.4f}")
-
+            
  
     avg = total_loss / max(n_batches, 1)
     log_handler.info(f"{tag} epoch {epoch} avg loss: {avg:.4f}")
@@ -339,7 +340,7 @@ def train(cfg: Dict[str, Any], resume=True):
             ckpt_path = save_checkpoint(
                 model, optimizer, scheduler, epoch, global_step, train_loss, cfg, out_dir, log
             )
-            
+
             log.info(f"Keeping last {cfg['keep_last_n_ckpts']} checkpoints, pruning older ones.")
             prune_old_checkpoints(out_dir, cfg["keep_last_n_ckpts"], log, wandb_run=wandb_run)
 

@@ -5,6 +5,8 @@
     "_comment_param_section_dataset": "Dataset parameters",
     "sample_rate": 16000,
     "max_len_sec": 15,
+    "data_source": "both",
+    "max_test_convos": 500,
     "_comment_param_section_encoder": "Dialogue encoder parameters",
     "d_model": 768,
     "num_ctx_layers": 2,
