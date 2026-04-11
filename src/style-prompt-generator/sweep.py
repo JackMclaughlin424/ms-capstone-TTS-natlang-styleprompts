@@ -199,9 +199,11 @@ def _train_fold(
     
     return {
         "val_loss":     best["val_loss"],
+        "best_epoch":   best["epoch"],
         "bertscore_f1": bs["bertscore_f1_mean"],
         "meteor":       met["meteor_mean"],
     }
+
 
 def _train_final_and_eval_test(
     cfg: dict,
@@ -336,6 +338,10 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int,
         val_losses    = [m["val_loss"]     for m in fold_metrics]
         bert_f1s      = [m["bertscore_f1"] for m in fold_metrics]
         meteor_scores = [m["meteor"]       for m in fold_metrics]
+
+        # from training, average best epoch to stop at for test
+        mean_best_epoch = int(round(np.mean([m["best_epoch"] for m in fold_metrics])))
+        log.info(f"Mean best epoch across folds: {mean_best_epoch}")
 
         summary = {
             "cv/mean_val_loss":     float(np.mean(val_losses)),

@@ -50,12 +50,13 @@ class StylePromptHead(nn.Module):
         self.stream_compressors = nn.ModuleList([
             nn.Linear(d_model, d_model // 2) for _ in range(4)
         ])
-        self.fusion = nn.Sequential(
-            nn.Linear(d_model * 2, llm_dim),
-            nn.Tanh(),
-            nn.Dropout(dropout),
-        )
-        self.norm = nn.LayerNorm(llm_dim)
+        
+
+        self.stream_to_llm = nn.ModuleList([
+            nn.Linear(d_model // 2, llm_dim) for _ in range(4)
+        ])
+
+
 
         self.prefix_const = nn.Parameter(torch.randn(num_prefix_tokens, llm_dim) * 0.02)
         encoder_layer = nn.TransformerEncoderLayer(
@@ -74,17 +75,18 @@ class StylePromptHead(nn.Module):
         B, D = dialogue_vec.shape
         d_model = D // 4
 
-        # split back into the 4 SCFA streams and compress each independently
+        # split back into the 4 SCFA streams and compress each independently 
+        # to create distinct context tokens
         streams    = dialogue_vec.split(d_model, dim=-1)
         compressed = [F.relu(comp(s)) for comp, s in zip(self.stream_compressors, streams)]
-        z = self.norm(self.fusion(torch.cat(compressed, dim=-1)))  # (B, LLM_DIM)
+        ctx_tokens = torch.stack([proj(c) for proj, c in zip(self.stream_to_llm, compressed)], dim=1)  # (B, 4, llm_dim)
 
         # z sits at position 0; learnable constants learn to query it
-        consts = self.prefix_const.unsqueeze(0).expand(B, -1, -1)  # (B, K, LLM_DIM)
-        seq    = torch.cat([z.unsqueeze(1), consts], dim=1)         # (B, 1+K, LLM_DIM)
-        out    = self.transformer(seq)                               # (B, 1+K, LLM_DIM)
+        consts     = self.prefix_const.unsqueeze(0).expand(B, -1, -1)
+        seq        = torch.cat([ctx_tokens, consts], dim=1)   # (B, 4+K, llm_dim)
+        out        = self.transformer(seq)
+        return out[:, 4:, :]# drop z position, return K prefix vectors
 
-        return out[:, 1:, :]  # drop z position, return K prefix vectors
 
 
 class StylePromptGenerator(nn.Module):

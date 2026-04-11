@@ -376,10 +376,16 @@ class CrossModalFusionAttention(nn.Module):
         self.k_text  = nn.Linear(d_model, d_model)
         self.v_text  = nn.Linear(d_model, d_model)
 
+        self.out_audio = nn.Linear(d_model, d_model)
+        self.out_text  = nn.Linear(d_model, d_model)
+
+
         self.norm_audio = nn.LayerNorm(d_model)
         self.norm_text  = nn.LayerNorm(d_model)
 
         self.dropout = nn.Dropout(dropout)
+
+        
 
     def _split_heads(self, x: torch.Tensor) -> torch.Tensor:
         # (B, T, d_model) -> (B * nhead, T, d_head) for batched matmul
@@ -418,9 +424,10 @@ class CrossModalFusionAttention(nn.Module):
         v_t = self._split_heads(self.v_text(z_text))
 
         # text queries into audio keys/values -> what audio says about text context
-        delta_a2t = self._merge_heads(self._attend(q_t, k_a, v_a), B, T)
+        delta_a2t = self.out_text( self._merge_heads(self._attend(q_t, k_a, v_a), B, T))
+
         # audio queries into text keys/values -> what text says about audio context
-        delta_t2a = self._merge_heads(self._attend(q_a, k_t, v_t), B, T)
+        delta_t2a = self.out_audio(self._merge_heads(self._attend(q_a, k_t, v_t), B, T))
 
         # residual add + norm (eqs 14-15)
         z_audio_fused = self.norm_audio(z_audio + delta_t2a)
