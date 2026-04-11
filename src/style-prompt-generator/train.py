@@ -202,11 +202,8 @@ def run_epoch(
                     grad_norm = _grad_norm(model)
                     run = f"[{cfg['run_name']}] " if cfg["run_name"] else ""
 
-                    if not use_tqdm:
-                        log_handler.info(f"{tag} epoch {epoch}  batch {n_batches}/{n_total}  loss {loss.item():.4f}")
-
                     log_handler.info(
-                        f"{run}epoch {epoch}  step {global_step}  "
+                        f"{run}epoch {epoch} | batch {n_batches}/{n_total} | step {global_step}  "
                         f"loss {loss.item():.4f}  lr {lr:.2e}  grad_norm {grad_norm:.3f}"
                     )
                     # step-level metrics -- logged at every log_every_n_steps
