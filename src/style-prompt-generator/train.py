@@ -339,8 +339,10 @@ def train(cfg: Dict[str, Any], resume=True):
             ckpt_path = save_checkpoint(
                 model, optimizer, scheduler, epoch, global_step, train_loss, cfg, out_dir, log
             )
+            
             log.info(f"Keeping last {cfg['keep_last_n_ckpts']} checkpoints, pruning older ones.")
-            prune_old_checkpoints(out_dir, cfg["keep_last_n_ckpts"], log)
+            prune_old_checkpoints(out_dir, cfg["keep_last_n_ckpts"], log, wandb_run=wandb_run)
+
  
             # log the checkpoint as a W&B artifact so you can restore any saved version
             if wandb_run is not None:

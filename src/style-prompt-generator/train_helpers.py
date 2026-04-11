@@ -383,11 +383,32 @@ def save_checkpoint(model, optimizer, scheduler, epoch, step, loss, cfg, out_dir
     return path
 
 
-def prune_old_checkpoints(out_dir: Path, keep: int, log):
+def prune_old_checkpoints(out_dir: Path, keep: int, log, wandb_run=None):
     ckpts = sorted(out_dir.glob("ckpt_epoch*.pt"))
     for old in ckpts[:-keep]:
+        # parse epoch from filename to match against artifact metadata
+        epoch_from_name = None
+        try:
+            epoch_from_name = int(old.stem.split("_")[1].replace("epoch", ""))
+        except (IndexError, ValueError):
+            pass
+
         old.unlink()
         log.info(f"Removed old checkpoint: {old}")
+
+        if wandb_run is not None and epoch_from_name is not None:
+            try:
+                import wandb
+                api = wandb.Api()
+                artifact_name = f"{wandb_run.entity}/{wandb_run.project}/checkpoint-{wandb_run.id}"
+                for av in api.artifacts(type_name="model", name=artifact_name):
+                    if av.metadata.get("epoch") == epoch_from_name:
+                        av.delete(delete_aliases=True)
+                        log.info(f"Deleted W&B artifact version for epoch {epoch_from_name}: {av.version}")
+                        break
+            except Exception as e:
+                log.warning(f"Could not delete W&B artifact for epoch {epoch_from_name}: {e}")
+
 
 
 def load_checkpoint(path: str, log, model, optimizer=None, scheduler=None):
