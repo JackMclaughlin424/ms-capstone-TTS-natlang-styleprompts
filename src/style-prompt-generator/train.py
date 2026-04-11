@@ -176,7 +176,8 @@ def run_epoch(
     n_total = len(loader)
  
     ctx = torch.enable_grad if is_train else torch.no_grad
- 
+    epoch_start = time.time()
+
     with ctx():
         iterable = tqdm(loader, desc=f"{tag} epoch {epoch}", unit="batch", leave=True, dynamic_ncols=True) if use_tqdm else loader
 
@@ -202,9 +203,17 @@ def run_epoch(
                     grad_norm = _grad_norm(model)
                     run = f"[{cfg['run_name']}] " if cfg["run_name"] else ""
 
+                    eta_str = ""
+                    if not use_tqdm:
+                        batches_done = n_batches + 1
+                        elapsed = time.time() - epoch_start
+                        secs_per_batch = elapsed / batches_done
+                        remaining = (n_total - batches_done) * secs_per_batch
+                        eta_str = f"  eta {remaining / 60:.1f}m"
+
                     log_handler.info(
-                        f"{run}epoch {epoch} | batch {n_batches}/{n_total} | step {global_step}  "
-                        f"loss {loss.item():.4f}  lr {lr:.2e}  grad_norm {grad_norm:.3f}"
+                        f"{run}epoch {epoch} - batch {n_batches + 1}/{n_total} - step {global_step} | "
+                        f"loss {loss.item():.4f}  lr {lr:.2e}  grad_norm {grad_norm:.3f}{eta_str}"
                     )
                     # step-level metrics -- logged at every log_every_n_steps
                     wandb_log({
