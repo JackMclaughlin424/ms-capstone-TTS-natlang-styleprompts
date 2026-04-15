@@ -369,16 +369,9 @@ def _train_final_and_eval_test(
 
 # Sweep function 
 
-def _make_sweep_fn(base_cfg: dict, n_folds: int, 
-                   all_conv_ids: np.ndarray, test_ids: set):
+def _make_sweep_fn(base_cfg: dict, n_folds: int):
 
     """Return the callable that W&B's agent invokes for each hyperparameter trial."""
-
-    # Precompute folds once so every trial sees the same data curriculum.
-    rng = np.random.default_rng(base_cfg["seed"])
-    shuffled = all_conv_ids.copy()
-    rng.shuffle(shuffled)
-    folds = np.array_split(shuffled, n_folds)
 
     def sweep_fn():
         gc.collect()
@@ -397,6 +390,15 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int,
             cfg["num_unfrozen_wavlm"] = n
 
         run.config.update({"n_folds": n_folds}, allow_val_change=True)
+
+        data_source      = cfg.get("data_source", "both")
+        raw_conv_ids     = _get_conv_ids(cfg["meta_path"], data_source)
+        trainval_arr, test_ids = _carve_data_splits(raw_conv_ids, cfg, data_source)
+
+        rng      = np.random.default_rng(cfg["seed"])
+        shuffled = trainval_arr.copy()
+        rng.shuffle(shuffled)
+        folds = np.array_split(shuffled, n_folds)
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -464,7 +466,7 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int,
     return sweep_fn
 
 
-def _make_test_sweep_fn(base_cfg: dict, all_conv_ids: np.ndarray, num_trials: int, trial_seeds: list):
+def _make_test_sweep_fn(base_cfg: dict, num_trials: int, trial_seeds: list):
     """Return the callable W&B invokes for each grid-search combo in test-experiment mode.
     Runs num_trials repetitions of _train_final_and_eval_test with independent split seeds."""
 
@@ -485,7 +487,8 @@ def _make_test_sweep_fn(base_cfg: dict, all_conv_ids: np.ndarray, num_trials: in
         run.config.update({"num_trials": num_trials}, allow_val_change=True)
 
         device      = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        data_source = cfg.get("data_source", "both")
+        data_source  = cfg.get("data_source", "both")
+        all_conv_ids = _get_conv_ids(cfg["meta_path"], data_source)
 
         global_step   = 0
         trial_results = []
@@ -568,16 +571,14 @@ def main():
     with open(args.sweep_values) as f:
         sweep_config = json.load(f)
 
-    data_source  = base_cfg.get("data_source", "both")
-    all_conv_ids = _get_conv_ids(base_cfg["meta_path"], data_source)
-
+    
     if args.experiment_type == "test":
         master_rng  = np.random.default_rng(base_cfg["seed"])
         trial_seeds = master_rng.integers(0, 2**31, size=args.num_trials).tolist()
-        sweep_fn    = _make_test_sweep_fn(base_cfg, all_conv_ids, args.num_trials, trial_seeds)
+        sweep_fn    = _make_test_sweep_fn(base_cfg, args.num_trials, trial_seeds)
     else:
-        trainval_ids, test_ids = _carve_data_splits(all_conv_ids, base_cfg)
-        sweep_fn = _make_sweep_fn(base_cfg, args.n_folds, trainval_ids, test_ids)
+        
+        sweep_fn = _make_sweep_fn(base_cfg, args.n_folds)
 
     project = base_cfg["wandb_project"]
     entity  = base_cfg.get("wandb_entity")
