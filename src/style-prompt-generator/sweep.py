@@ -27,6 +27,7 @@ import wandb
 import json
 import os
 import time
+import itertools
 
 from model.train_helpers import (
     load_config, apply_overrides, set_seed,
@@ -446,57 +447,125 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int,
     return sweep_fn
 
 
+def _make_test_sweep_fn(base_cfg: dict, all_conv_ids: np.ndarray, num_trials: int, trial_seeds: list):
+    """Return the callable W&B invokes for each grid-search combo in test-experiment mode.
+    Runs num_trials repetitions of _train_final_and_eval_test with independent split seeds."""
+
+    def sweep_fn():
+        gc.collect()
+        torch.cuda.empty_cache()
+        run = wandb.init(settings=wandb.Settings(console="off"))
+        cfg = deepcopy(base_cfg)
+
+        for key, val in run.config.items():
+            if key in cfg:
+                cfg[key] = val
+        if "num_unfrozen_embedder_layers" in run.config:
+            n = run.config["num_unfrozen_embedder_layers"]
+            cfg["num_unfrozen_bert"]  = n
+            cfg["num_unfrozen_wavlm"] = n
+
+        run.config.update({"num_trials": num_trials}, allow_val_change=True)
+
+        device      = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        data_source = cfg.get("data_source", "both")
+
+        trial_results = []
+        for trial_idx, trial_seed in enumerate(trial_seeds):
+            log.info(f"=== Trial {trial_idx + 1}/{num_trials} (seed={trial_seed}) ===")
+            trial_cfg         = deepcopy(cfg)
+            trial_cfg["seed"] = int(trial_seed)
+
+            trainval_ids, test_ids = _carve_data_splits(all_conv_ids, trial_cfg, data_source)
+            metrics = _train_final_and_eval_test(trial_cfg, trainval_ids, test_ids, run, device)
+            trial_results.append(metrics)
+            log.info(
+                f"Trial {trial_idx + 1}: test_loss={metrics['test_loss']:.4f}  "
+                f"bertscore_f1={metrics['bertscore_f1']:.4f}  meteor={metrics['meteor']:.4f}"
+            )
+
+        bert_f1s      = [m["bertscore_f1"] for m in trial_results]
+        meteor_scores = [m["meteor"]        for m in trial_results]
+        test_losses   = [m["test_loss"]     for m in trial_results]
+
+        summary = {
+            "trials/mean_bertscore_f1": float(np.mean(bert_f1s)),
+            "trials/std_bertscore_f1":  float(np.std(bert_f1s)),
+            "trials/mean_meteor":       float(np.mean(meteor_scores)),
+            "trials/std_meteor":        float(np.std(meteor_scores)),
+            "trials/mean_test_loss":    float(np.mean(test_losses)),
+            "trials/std_test_loss":     float(np.std(test_losses)),
+        }
+        run.summary.update(summary)
+        log.info(
+            f"Trial summary: bertscore_f1={summary['trials/mean_bertscore_f1']:.4f} "
+            f"(±{summary['trials/std_bertscore_f1']:.4f})  "
+            f"meteor={summary['trials/mean_meteor']:.4f} "
+            f"(±{summary['trials/std_meteor']:.4f})"
+        )
+        run.finish()
+
+    return sweep_fn
+
+
+
 # Entry point
 
 def main():
     parser = argparse.ArgumentParser(
         description="W&B hyperparameter sweep with N-fold cross-validation."
     )
-    parser.add_argument("--config",        required=True,
+    parser.add_argument("--config",       required=True,
                         help="Base config JSON with fixed hyperparameters (e.g. default_sweep_config.json).")
-    parser.add_argument("--sweep_values",  required=True,
+    parser.add_argument("--sweep_values", required=True,
                         help="W&B sweep search-space JSON (e.g. default_sweep_values.json).")
-    parser.add_argument("--n_folds",  type=int, default=5,
-                        help="Number of CV folds (default: 5)")
-    parser.add_argument("--sweep_id", default=None,
-                        help="Short sweep ID to join an existing sweep instead of creating one. "
-                             "entity/project are read from the config.")
-    parser.add_argument("--count",    type=int, default=None,
-                        help="Max trials this agent will run (default: unlimited)")
-    parser.add_argument("--override", nargs="*", metavar="KEY=VALUE",
-                        help="Override base config fields (same syntax as train.py)")
+    parser.add_argument("--experiment_type", choices=["hyperparameter", "test"],
+                        default="hyperparameter",
+                        help="'hyperparameter' runs a Bayesian/random W&B sweep; "
+                             "'test' runs a grid sweep where each combo is repeated num_trials times "
+                             "with independent random train/test splits.")
+    parser.add_argument("--num_trials",  type=int, default=5,
+                        help="Number of independent split-seed trials per combo (test mode only).")
+    parser.add_argument("--n_folds",     type=int, default=5,
+                        help="Number of CV folds (hyperparameter mode only, default: 5).")
+    parser.add_argument("--sweep_id",    default=None,
+                        help="Short sweep ID to join an existing sweep instead of creating one.")
+    parser.add_argument("--count",       type=int, default=None,
+                        help="Max trials this agent will run (default: unlimited).")
+    parser.add_argument("--override",    nargs="*", metavar="KEY=VALUE",
+                        help="Override base config fields (same syntax as train.py).")
     args = parser.parse_args()
 
-    base_cfg      = load_config(args.config)
-    base_cfg      = apply_overrides(base_cfg, args.override)
+    base_cfg = load_config(args.config)
+    base_cfg = apply_overrides(base_cfg, args.override)
 
     with open(args.sweep_values) as f:
         sweep_config = json.load(f)
 
-    # get data splits, keeping conversations independent in test and train splits
     data_source  = base_cfg.get("data_source", "both")
     all_conv_ids = _get_conv_ids(base_cfg["meta_path"], data_source)
-    trainval_ids, test_ids = _carve_data_splits(all_conv_ids, base_cfg)
 
-    # build sweep function
-    sweep_fn = _make_sweep_fn(base_cfg, args.n_folds, trainval_ids, test_ids)
-
+    if args.experiment_type == "test":
+        master_rng  = np.random.default_rng(base_cfg["seed"])
+        trial_seeds = master_rng.integers(0, 2**31, size=args.num_trials).tolist()
+        sweep_fn    = _make_test_sweep_fn(base_cfg, all_conv_ids, args.num_trials, trial_seeds)
+    else:
+        trainval_ids, test_ids = _carve_data_splits(all_conv_ids, base_cfg)
+        sweep_fn = _make_sweep_fn(base_cfg, args.n_folds, trainval_ids, test_ids)
 
     project = base_cfg["wandb_project"]
     entity  = base_cfg.get("wandb_entity")
 
     if args.sweep_id:
-        # agent 2 path: just join the existing sweep
         sweep_id = args.sweep_id
         log.info(f"Joining existing sweep: {sweep_id}")
     else:
-        # agent 1 path: create the sweep
         sweep_id = wandb.sweep(deepcopy(sweep_config), project=project, entity=entity)
         log.info(f"Created sweep: {sweep_id}")
 
-
     wandb.agent(sweep_id, function=sweep_fn, count=args.count,
                 project=project, entity=entity)
+
 
 
 
