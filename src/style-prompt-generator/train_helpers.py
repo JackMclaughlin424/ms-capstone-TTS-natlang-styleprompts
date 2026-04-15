@@ -19,8 +19,6 @@ from torch.utils.data import DataLoader, random_split
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
-    AutoModel,
-    Wav2Vec2FeatureExtractor,
     get_cosine_schedule_with_warmup,
     get_linear_schedule_with_warmup,
 )
