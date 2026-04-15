@@ -442,6 +442,7 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int,
             f"Test  loss={test_metrics['test_loss']:.4f}  "
             f"bertscore_f1={test_metrics['bertscore_f1']:.4f}  "
             f"meteor={test_metrics['meteor']:.4f}"
+            f"chrf={test_metrics["chrf"]:.4f}"
         )
         summary.update({
             "test/loss":         test_metrics["test_loss"],
@@ -518,11 +519,15 @@ def _make_test_sweep_fn(base_cfg: dict, all_conv_ids: np.ndarray, num_trials: in
             "trials/std_chrf":          float(np.std(chrf_scores)),
         }
         run.summary.update(summary)
+        wandb_log(summary, step=global_step, run=run)
+
         log.info(
             f"Trial summary: bertscore_f1={summary['trials/mean_bertscore_f1']:.4f} "
             f"(±{summary['trials/std_bertscore_f1']:.4f})  "
             f"meteor={summary['trials/mean_meteor']:.4f} "
             f"(±{summary['trials/std_meteor']:.4f})"
+            f"chrf={summary["trials/mean_chrf"]:.4f}"
+            f"(±{summary['trials/std_chrf']:.4f})"
         )
         run.finish()
 
