@@ -16,9 +16,9 @@ import pandas as pd
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
-from ConvoStyleDataset import ConvoStyleDataset
+from dataset.ConvoStyleDataset import ConvoStyleDataset
 
-from train_helpers import compute_bertscore, compute_meteor
+from model.train_helpers import compute_bertscore, compute_meteor
 
 # same repo used by StylePromptGenerator -- keep these in sync
 LLM_REPO = "meta-llama/Llama-3.2-3B-Instruct"  # or whichever you choose

@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from typing import Optional, List
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
-from DialogueEncoder import SCFA, DialoguePooler
+from model.DialogueEncoder import SCFA, DialoguePooler
 
 
 # not really used, these are controlled via config parameters now

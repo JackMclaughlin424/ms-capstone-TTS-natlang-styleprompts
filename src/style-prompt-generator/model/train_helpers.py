@@ -23,15 +23,15 @@ from transformers import (
     get_linear_schedule_with_warmup,
 )
 
-from ConvoStyleDataset import ConvoStyleDataset, collate_pad
-from DialogueEncoder import (
+from dataset.ConvoStyleDataset import ConvoStyleDataset, collate_pad
+from model.DialogueEncoder import (
     DualModalityEmbedder,
     SCFA,
     DialoguePooler,
     SelfAttentivePooling,
     ModalityEncoder,
 )
-from StylePromptGenerator import (
+from model.StylePromptGenerator import (
     StylePromptHead,
     StylePromptGenerator,
     SCFAWithStyleHead,

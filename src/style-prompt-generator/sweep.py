@@ -28,13 +28,13 @@ import json
 import os
 import time
 
-from train_helpers import (
+from model.train_helpers import (
     load_config, apply_overrides, set_seed,
     build_model, build_optimizer_and_scheduler,
     wandb_log, compute_bertscore, compute_meteor,
 )
 from train import run_epoch
-from ConvoStyleDataset import ConvoStyleDataset, collate_pad
+from dataset.ConvoStyleDataset import ConvoStyleDataset, collate_pad
 from torch.utils.data import DataLoader
 
 logging.basicConfig(

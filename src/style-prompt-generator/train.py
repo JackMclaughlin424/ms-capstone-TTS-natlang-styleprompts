@@ -14,7 +14,7 @@ from typing import Any, Dict
 import torch
 import torch.nn as nn
 
-from StylePromptGenerator import (
+from model.StylePromptGenerator import (
     SCFAWithStyleHead
 )
 
@@ -29,7 +29,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module=r"torch\._inducto
 
 
 
-from train_helpers import *
+from model.train_helpers import *
 
 logging.getLogger().addHandler(logging.NullHandler())
 logging.getLogger().setLevel(logging.INFO)
