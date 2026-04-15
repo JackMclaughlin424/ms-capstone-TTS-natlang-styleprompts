@@ -380,8 +380,7 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int):
         cfg = deepcopy(base_cfg)
 
         for key, val in run.config.items():
-            if key in cfg:
-                cfg[key] = val
+            cfg[key] = val
 
         # expand shared sweep param into per-encoder keys
         if "num_unfrozen_embedder_layers" in run.config:
@@ -390,6 +389,7 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int):
             cfg["num_unfrozen_wavlm"] = n
 
         run.config.update({"n_folds": n_folds}, allow_val_change=True)
+        log.info(f"Run config: {json.dumps(cfg, indent=2, default=str)}")
 
         data_source      = cfg.get("data_source", "both")
         raw_conv_ids     = _get_conv_ids(cfg["meta_path"], data_source)
@@ -477,12 +477,15 @@ def _make_test_sweep_fn(base_cfg: dict, num_trials: int, trial_seeds: list):
         cfg = deepcopy(base_cfg)
 
         for key, val in run.config.items():
-            if key in cfg:
-                cfg[key] = val
+            
+            cfg[key] = val
         if "num_unfrozen_embedder_layers" in run.config:
             n = run.config["num_unfrozen_embedder_layers"]
             cfg["num_unfrozen_bert"]  = n
             cfg["num_unfrozen_wavlm"] = n
+
+        log.info(f"Run config: {json.dumps(cfg, indent=2, default=str)}")
+
 
         run.config.update({"num_trials": num_trials}, allow_val_change=True)
 
