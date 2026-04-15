@@ -32,7 +32,7 @@ import itertools
 from model.train_helpers import (
     load_config, apply_overrides, set_seed,
     build_model, build_optimizer_and_scheduler,
-    wandb_log, compute_bertscore, compute_meteor,
+    wandb_log, compute_bertscore, compute_meteor, compute_chrf,
 )
 from train import run_epoch
 from dataset.ConvoStyleDataset import ConvoStyleDataset, collate_pad
@@ -248,10 +248,12 @@ def _train_fold(
 
     bs  = compute_bertscore(all_preds, all_refs, device=str(device))
     met = compute_meteor(all_preds, all_refs)
+    chrf = compute_chrf(all_preds, all_refs)
 
     wandb_log({
         f"{fp}/bertscore_f1": bs["bertscore_f1_mean"],
         f"{fp}/meteor":       met["meteor_mean"],
+        f"{fp}/chrf":         chrf["chrf_mean"],
     }, step=global_step, run=sweep_run)
 
     for i, (pred, ref, txt) in enumerate(zip(all_preds[:3], all_refs[:3], all_texts[:3])):
@@ -268,7 +270,9 @@ def _train_fold(
         "best_epoch":   best["epoch"],
         "bertscore_f1": bs["bertscore_f1_mean"],
         "meteor":       met["meteor_mean"],
+        "chrf":         chrf["chrf_mean"],
     }, global_step
+
 
 
 def _train_final_and_eval_test(
@@ -277,6 +281,7 @@ def _train_final_and_eval_test(
     test_ids: set,
     sweep_run,
     device: torch.device,
+    global_step: int = 0,
 ) -> dict:
     """Train on all train/val data, evaluate generation metrics on held-out test split."""
     set_seed(cfg["seed"])
@@ -287,7 +292,6 @@ def _train_final_and_eval_test(
     optimizer, scheduler = build_optimizer_and_scheduler(model, cfg, total_steps, log)
    
 
-    global_step = 0
     for epoch in range(cfg["num_epochs"]):
         _, global_step = run_epoch(
             model, train_loader, optimizer, scheduler, 
@@ -295,13 +299,13 @@ def _train_final_and_eval_test(
             , is_train=True, use_tqdm=False
         )
 
+    model.eval()
     test_loss, _ = run_epoch(
         model, test_loader, optimizer, scheduler, 
         device, cfg, 0, global_step, wandb_run=None, log_handler=log
         , is_train=False, use_tqdm=False
     )
 
-    model.eval()
     all_preds, all_refs, all_texts = [], [], []
 
     with torch.no_grad():
@@ -316,9 +320,13 @@ def _train_final_and_eval_test(
                 if cfg["num_turns"] == 0:
                     audio     = torch.zeros_like(audio)
                     text_only = torch.ones_like(text_only)
+                
                 ctx   = model.scfa(audio, lengths, texts, speaker_ids, text_only)
                 vec   = model.pooler(ctx)
+                del ctx
                 preds = model.style_generator.generate(vec)
+                del vec
+
 
                 all_preds.extend(preds)
                 all_refs.extend([chain[-1] for chain in targets])
@@ -332,12 +340,14 @@ def _train_final_and_eval_test(
 
     bs  = compute_bertscore(all_preds, all_refs, device=str(device))
     met = compute_meteor(all_preds, all_refs)
+    chrf = compute_chrf(all_preds, all_refs)
 
-    # log test metrics
     wandb_log({
         f"test/bertscore_f1": bs["bertscore_f1_mean"],
         f"test/meteor":       met["meteor_mean"],
+        f"test/chrf":         chrf["chrf_mean"],
     }, step=global_step, run=sweep_run)
+
 
     for i, (pred, ref, txt) in enumerate(zip(all_preds[:3], all_refs[:3], all_texts[:3])):
         log.info(f"  [Test Sample {i+1}]")
@@ -352,7 +362,9 @@ def _train_final_and_eval_test(
         "test_loss":     test_loss,
         "bertscore_f1":  bs["bertscore_f1_mean"],
         "meteor":        met["meteor_mean"],
-    }
+        "chrf":          chrf["chrf_mean"],
+    }, global_step
+
 
 
 # Sweep function 
@@ -405,6 +417,7 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int,
         val_losses    = [m["val_loss"]     for m in fold_metrics]
         bert_f1s      = [m["bertscore_f1"] for m in fold_metrics]
         meteor_scores = [m["meteor"]       for m in fold_metrics]
+        chrf_scores   = [m["chrf"]         for m in fold_metrics]
 
         # from training, average best epoch to stop at for test
         mean_best_epoch = int(round(np.mean([m["best_epoch"] for m in fold_metrics])))
@@ -417,6 +430,8 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int,
             "cv/std_bertscore_f1":  float(np.std(bert_f1s)),
             "cv/mean_meteor":       float(np.mean(meteor_scores)),
             "cv/std_meteor":        float(np.std(meteor_scores)),
+            "cv/mean_chrf":         float(np.mean(chrf_scores)),
+            "cv/std_chrf":          float(np.std(chrf_scores)),
         }
 
         # held-out test evaluation (train on all trainval, eval on test) 
@@ -432,6 +447,7 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int,
             "test/loss":         test_metrics["test_loss"],
             "test/bertscore_f1": test_metrics["bertscore_f1"],
             "test/meteor":       test_metrics["meteor"],
+            "test/chrf":         test_metrics["chrf"],
         })
 
         run.summary.update(summary)
@@ -470,6 +486,7 @@ def _make_test_sweep_fn(base_cfg: dict, all_conv_ids: np.ndarray, num_trials: in
         device      = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         data_source = cfg.get("data_source", "both")
 
+        global_step   = 0
         trial_results = []
         for trial_idx, trial_seed in enumerate(trial_seeds):
             log.info(f"=== Trial {trial_idx + 1}/{num_trials} (seed={trial_seed}) ===")
@@ -477,7 +494,8 @@ def _make_test_sweep_fn(base_cfg: dict, all_conv_ids: np.ndarray, num_trials: in
             trial_cfg["seed"] = int(trial_seed)
 
             trainval_ids, test_ids = _carve_data_splits(all_conv_ids, trial_cfg, data_source)
-            metrics = _train_final_and_eval_test(trial_cfg, trainval_ids, test_ids, run, device)
+            metrics, global_step = _train_final_and_eval_test(trial_cfg, trainval_ids, test_ids, run, device, global_step)
+            
             trial_results.append(metrics)
             log.info(
                 f"Trial {trial_idx + 1}: test_loss={metrics['test_loss']:.4f}  "
@@ -487,6 +505,7 @@ def _make_test_sweep_fn(base_cfg: dict, all_conv_ids: np.ndarray, num_trials: in
         bert_f1s      = [m["bertscore_f1"] for m in trial_results]
         meteor_scores = [m["meteor"]        for m in trial_results]
         test_losses   = [m["test_loss"]     for m in trial_results]
+        chrf_scores   = [m["chrf"]          for m in trial_results]
 
         summary = {
             "trials/mean_bertscore_f1": float(np.mean(bert_f1s)),
@@ -495,6 +514,8 @@ def _make_test_sweep_fn(base_cfg: dict, all_conv_ids: np.ndarray, num_trials: in
             "trials/std_meteor":        float(np.std(meteor_scores)),
             "trials/mean_test_loss":    float(np.mean(test_losses)),
             "trials/std_test_loss":     float(np.std(test_losses)),
+            "trials/mean_chrf":         float(np.mean(chrf_scores)),
+            "trials/std_chrf":          float(np.std(chrf_scores)),
         }
         run.summary.update(summary)
         log.info(

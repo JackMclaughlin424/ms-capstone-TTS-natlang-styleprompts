@@ -1,6 +1,8 @@
 import nltk
 from nltk.translate.meteor_score import meteor_score as _meteor
 from bert_score import score as _bert_score
+from sacrebleu.metrics import CHRF as _CHRF
+
 import argparse
 import json
 import logging
@@ -506,4 +508,19 @@ def compute_meteor(
     return {
         "meteor_mean": float(scores.mean()) if len(scores) else 0.0,
         "meteor_std":  float(scores.std())  if len(scores) else 0.0,
+    }
+
+def compute_chrf(
+    preds: List[str],
+    refs: List[str],
+) -> Dict[str, float]:
+    """Compute CHrF++ mean and std over a batch of predictions."""
+    chrf = _CHRF(word_order=2)  # word_order=2 gives CHrF++
+    scores = np.array([
+        chrf.sentence_score(pred, [ref]).score / 100.0  # normalize to [0, 1]
+        for pred, ref in zip(preds, refs)
+    ])
+    return {
+        "chrf_mean": float(scores.mean()) if len(scores) else 0.0,
+        "chrf_std":  float(scores.std())  if len(scores) else 0.0,
     }

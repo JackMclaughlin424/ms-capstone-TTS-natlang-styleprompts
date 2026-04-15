@@ -28,7 +28,7 @@
     "system_prompt": "Speaking style:",
     "_comment_param_section_training": "Training parameters",
     "batch_size": 8,
-    "num_epochs": 15,
+    "num_epochs": 12,
     "weight_decay": 5e-3,
     "grad_clip": 1.0,
     "warmup_ratio": 0.1,
