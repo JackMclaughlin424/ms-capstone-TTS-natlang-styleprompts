@@ -224,6 +224,7 @@ def main(
     llm_repo: str = LLM_REPO,
     output_path: str = "baseline_outputs.json",
     run_name: str = WANDB_RUN_NAME,
+    data_source: str = "both",
 ):
 
 
@@ -235,14 +236,29 @@ def main(
     print(f"  {len(ds)} chains available")
 
 
-    # reproduce the same 10% held-out test split as sweep.py (seeds must be same)
-    all_conv_ids = np.array(pd.read_parquet(meta_path)["conv_id"].unique())
-    rng_split = np.random.default_rng(seed)
-    shuffled_all = all_conv_ids.copy()
-    rng_split.shuffle(shuffled_all)
-    n_test   = max(1, int(len(shuffled_all) * 0.10))
-    test_ids = set(shuffled_all[:n_test])
-    print(f"  Test split: {len(test_ids)} conv_ids (10% held-out, seed={seed})")
+    meta_df = pd.read_parquet(meta_path)
+
+    if data_source != "both":
+        other_source = "styletalk" if data_source == "expresso" else "expresso"
+        source_ids   = set(meta_df[meta_df["source"] == data_source]["conv_id"].unique())
+        other_ids    = np.array(meta_df[meta_df["source"] == other_source]["conv_id"].unique())
+        rng_test     = np.random.default_rng(seed)
+        rng_test.shuffle(other_ids)
+        test_ids     = set(other_ids)
+        print(
+            f"  {len(source_ids)} {data_source} conv_ids for train/few-shot  |  "
+            f"{len(test_ids)} {other_source} conv_ids for test (cross-dataset)"
+        )
+    else:
+        source_ids   = None  # all sources used for train
+        all_conv_ids = np.array(meta_df["conv_id"].unique())
+        rng_split    = np.random.default_rng(seed)
+        shuffled_all = all_conv_ids.copy()
+        rng_split.shuffle(shuffled_all)
+        n_test   = max(1, int(len(shuffled_all) * 0.10))
+        test_ids = set(shuffled_all[:n_test])
+        print(f"  Test split: {len(test_ids)} conv_ids (10% held-out, seed={seed})")
+
 
     def has_valid_styles(chain):
         return all(
@@ -251,17 +267,19 @@ def main(
             for chain_row in chain
         )
 
-    # eval pool: test split only
     test_indices = [
         i for i, chain in enumerate(ds._chains)
         if chain[-1].get("conv_id") in test_ids and has_valid_styles(chain)
     ]
 
-    # few-shot pool: train split only, so no eval chain leaks into context
+    # few-shot pool: exclude test split; if data_source != "both", restrict to that source only
     train_indices = [
         i for i, chain in enumerate(ds._chains)
-        if chain[-1].get("conv_id") not in test_ids and has_valid_styles(chain)
+        if chain[-1].get("conv_id") not in test_ids
+        and (source_ids is None or chain[-1].get("conv_id") in source_ids)
+        and has_valid_styles(chain)
     ]
+
 
     query_indices = random.sample(test_indices, min(num_eval_samples, len(test_indices)))
     print(f"\n{len(query_indices)} query chains sampled for evaluation.")
@@ -278,7 +296,9 @@ def main(
         "max_new_tokens":   max_new_tokens,
         "max_len_sec":      max_len_sec,
         "seed":             seed,
+        "data_source":      data_source,
     }, run_name)
+
 
 
     all_preds, all_refs = [], []
@@ -359,6 +379,11 @@ def parse_args():
     p.add_argument("--max_new_tokens",   type=int,   default=80,     help="Max tokens to generate per prediction (default: 80)")
     p.add_argument("--inference_batch_size",   type=int,   default=8,     help="Size of prompt batch to run inference. Adjust for VRAM constraints.")
     p.add_argument("--max_len_sec",      type=int,   default=15,     help="Max audio length in seconds (default: 15)")
+    p.add_argument("--data_source", type=str, default="both",
+                   choices=["both", "styletalk", "expresso"],
+                   help="Dataset source for train/few-shot pool. 'both' uses a 10%% held-out test split; "
+                        "'styletalk' or 'expresso' trains on that source and tests cross-dataset on the other.")
+
     p.add_argument("--llm_repo", type=str, default=LLM_REPO, help="HuggingFace repo for the LLM (default: Llama 3.2 3B)")
     p.add_argument("--run_name", type=str, default=WANDB_RUN_NAME, help=f"W&B run name for online logging. Default: {WANDB_RUN_NAME}")
 
