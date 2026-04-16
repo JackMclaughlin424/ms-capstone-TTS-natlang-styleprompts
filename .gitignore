@@ -5,6 +5,7 @@ data
 *.csv
 *.png
 src/eda/figures/
+src/style-prompt-generator/training_notebooks/results_figures/
 logs/
 __pycache__
 .vscode
