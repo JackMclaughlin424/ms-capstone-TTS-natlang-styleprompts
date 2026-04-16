@@ -20,6 +20,7 @@ from dataset.ConvoStyleDataset import ConvoStyleDataset
 
 from model.train_helpers import compute_bertscore, compute_meteor, compute_chrf
 
+from tqdm import tqdm
 
 
 LLM_REPO = "meta-llama/Llama-3.2-3B-Instruct"  
@@ -177,7 +178,8 @@ def batch_query_llm(
     max_new_tokens: int, batch_size: int = 8
 ) -> list[str]:
     results = []
-    for start in range(0, len(full_prompts), batch_size):
+    for start in tqdm(range(0, len(full_prompts), batch_size), desc="Inference batches"):
+
         batch = full_prompts[start : start + batch_size]
         inputs = tokenizer(
             batch,
@@ -284,7 +286,8 @@ def main(
 
      # build all prompts up front
     full_prompts, ground_truths, meta = [], [], []
-    for qi in query_indices:
+    for qi in tqdm(query_indices, desc="Building prompts"):
+
         few_shot_chains = [ds[i] for i in random.sample(train_indices, num_few_shot)]
         system_prompt   = build_system_prompt(few_shot_chains)
         query_chain     = ds[qi]
