@@ -18,10 +18,11 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from dataset.ConvoStyleDataset import ConvoStyleDataset
 
-from model.train_helpers import compute_bertscore, compute_meteor
+from model.train_helpers import compute_bertscore, compute_meteor, compute_chrf
 
-# same repo used by StylePromptGenerator -- keep these in sync
-LLM_REPO = "meta-llama/Llama-3.2-3B-Instruct"  # or whichever you choose
+
+
+LLM_REPO = "meta-llama/Llama-3.2-3B-Instruct"  
 LLM_DIM  = 3072  # must match model's hidden_size
 
 
@@ -317,18 +318,21 @@ def main(
     print("EVALUATION METRICS")
     print("="*60)
 
-    bs_metrics  = compute_bertscore(all_preds, all_refs, device=device)
-    met_metrics = compute_meteor(all_preds, all_refs)
+    bs_metrics   = compute_bertscore(all_preds, all_refs, device=device)
+    met_metrics  = compute_meteor(all_preds, all_refs)
+    chrf_metrics = compute_chrf(all_preds, all_refs)
 
     print(f"BERTScore F1  : {bs_metrics['bertscore_f1_mean']:.4f} (±{bs_metrics['bertscore_f1_std']:.4f})")
     print(f"BERTScore P   : {bs_metrics['bertscore_precision_mean']:.4f} (±{bs_metrics['bertscore_precision_std']:.4f})")
     print(f"BERTScore R   : {bs_metrics['bertscore_recall_mean']:.4f} (±{bs_metrics['bertscore_recall_std']:.4f})")
     print(f"METEOR        : {met_metrics['meteor_mean']:.4f} (±{met_metrics['meteor_std']:.4f})")
+    print(f"ChrF++        : {chrf_metrics['chrf_mean']:.4f} (±{chrf_metrics['chrf_std']:.4f})")
 
-    wandb_log({**bs_metrics, **met_metrics}, wandb_run)
+    wandb_log({**bs_metrics, **met_metrics, **chrf_metrics}, wandb_run)
     wandb_finish(wandb_run)
 
-    return {**bs_metrics, **met_metrics}
+    return {**bs_metrics, **met_metrics, **chrf_metrics}
+
 
 
 def parse_args():
