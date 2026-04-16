@@ -34,14 +34,6 @@ WANDB_ENTITY   = "jdm8943-rochester-institute-of-technology"
 
 
 
-
-# W&B config -- set USE_WANDB=False or unset WANDB_API_KEY to disable
-USE_WANDB      = True
-WANDB_PROJECT  = "style-prompt-gen"
-WANDB_ENTITY   = "jdm8943-rochester-institute-of-technology"
-WANDB_RUN_NAME = "baseline-llama3B-fewshot"
-
-
 def load_dataset(h5_path: str, meta_path: str, num_turns: int, max_len_sec: int) -> ConvoStyleDataset:
     return ConvoStyleDataset(
         h5_path=h5_path,
@@ -222,11 +214,14 @@ def run_baseline(cfg: dict, run) -> dict:
         print(f"  Test split: {len(test_ids)} conv_ids (10% held-out, seed={seed})")
 
     def has_valid_styles(chain):
-        return all(
-            chain_row.get("text_description") not in (None, "")
-            and not (isinstance(chain_row.get("text_description"), float) and np.isnan(chain_row.get("text_description")))
-            for chain_row in chain
+        # only the final turn's style is required (it's the prediction target)
+        last = chain[-1]
+        val  = last.get("text_description")
+        return (
+            val not in (None, "")
+            and not (isinstance(val, float) and np.isnan(val))
         )
+
 
     test_indices = [
         i for i, chain in enumerate(ds._chains)
@@ -352,8 +347,8 @@ def parse_args():
     p.add_argument("--count",                type=int,   default=None,   help="Max trials this agent will run (default: unlimited)")
     # fixed hyperparams (not swept unless added to sweep_values.json)
     p.add_argument("--num_turns",            type=int,   default=5)
-    p.add_argument("--num_few_shot",         type=int,   default=3)
-    p.add_argument("--num_eval_samples",     type=int,   default=50)
+    p.add_argument("--num_few_shot",         type=int,   default=25)
+    p.add_argument("--num_eval_samples",     type=int,   default=200)
     p.add_argument("--max_new_tokens",       type=int,   default=80)
     p.add_argument("--inference_batch_size", type=int,   default=8)
     p.add_argument("--max_len_sec",          type=int,   default=15)
@@ -394,5 +389,4 @@ def main():
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    main(**vars(args))
+    main()
