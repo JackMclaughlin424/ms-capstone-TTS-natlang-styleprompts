@@ -122,7 +122,7 @@ def build_user_prompt(query_chain: list) -> str:
 
 # wandb helpers
 
-def wandb_init(cfg: dict):
+def wandb_init(cfg: dict, run_name):
     if not USE_WANDB:
         return None
     try:
@@ -139,7 +139,7 @@ def wandb_init(cfg: dict):
         run = wandb.init(
             project=WANDB_PROJECT,
             entity=WANDB_ENTITY,
-            name=WANDB_RUN_NAME,
+            name=run_name,
             config=cfg,
         )
         print(f"W&B run: {run.url}")
@@ -223,6 +223,7 @@ def main(
     seed: int = 42,
     llm_repo: str = LLM_REPO,
     output_path: str = "baseline_outputs.json",
+    run_name: str = WANDB_RUN_NAME,
 ):
 
 
@@ -277,7 +278,7 @@ def main(
         "max_new_tokens":   max_new_tokens,
         "max_len_sec":      max_len_sec,
         "seed":             seed,
-    })
+    }, run_name)
 
 
     all_preds, all_refs = [], []
@@ -359,6 +360,8 @@ def parse_args():
     p.add_argument("--inference_batch_size",   type=int,   default=8,     help="Size of prompt batch to run inference. Adjust for VRAM constraints.")
     p.add_argument("--max_len_sec",      type=int,   default=15,     help="Max audio length in seconds (default: 15)")
     p.add_argument("--llm_repo", type=str, default=LLM_REPO, help="HuggingFace repo for the LLM (default: Llama 3.2 3B)")
+    p.add_argument("--run_name", type=str, default=WANDB_RUN_NAME, help=f"W&B run name for online logging. Default: {WANDB_RUN_NAME}")
+
 
     p.add_argument("--seed",             type=int,   default=42,     help="Random seed (default: 42)")
     p.add_argument("--output_path", type=str, default="baseline_outputs.json",
