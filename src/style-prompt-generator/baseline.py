@@ -298,6 +298,11 @@ def main(
     predictions = batch_query_llm(tokenizer, model, full_prompts, device
                                   , max_new_tokens, batch_size=inference_batch_size)
 
+    del model, tokenizer
+    gc.collect()
+    if device == "cuda":
+        torch.cuda.empty_cache()
+
     # collect results 
     all_preds, all_refs = [], []
     records = []
@@ -330,6 +335,11 @@ def main(
 
     wandb_log({**bs_metrics, **met_metrics, **chrf_metrics}, wandb_run)
     wandb_finish(wandb_run)
+
+    gc.collect()
+    if device == "cuda":
+        torch.cuda.empty_cache()
+
 
     return {**bs_metrics, **met_metrics, **chrf_metrics}
 
