@@ -412,7 +412,7 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int):
             fold_metrics.append(metrics)
             log.info(
                 f"Fold {fold_idx + 1}  val_loss={metrics['val_loss']:.4f}  "
-                f"bertscore_f1={metrics['bertscore_f1']:.4f}  meteor={metrics['meteor']:.4f}"
+                f"bertscore_f1={metrics['bertscore_f1']:.4f}  meteor={metrics['meteor']:.4f}  chrf={metrics['chrf']:.4f}"
             )
 
         # aggregate across folds (the sweep optimises this)
@@ -506,7 +506,7 @@ def _make_test_sweep_fn(base_cfg: dict, num_trials: int, trial_seeds: list):
             trial_results.append(metrics)
             log.info(
                 f"Trial {trial_idx + 1}: test_loss={metrics['test_loss']:.4f}  "
-                f"bertscore_f1={metrics['bertscore_f1']:.4f}  meteor={metrics['meteor']:.4f}"
+                f"bertscore_f1={metrics['bertscore_f1']:.4f}  meteor={metrics['meteor']:.4f}  chrf={metrics['chrf']:.4f}"
             )
 
         bert_f1s      = [m["bertscore_f1"] for m in trial_results]
@@ -528,7 +528,7 @@ def _make_test_sweep_fn(base_cfg: dict, num_trials: int, trial_seeds: list):
         wandb_log(summary, step=global_step, run=run)
 
         log.info(
-            f"Trial summary: bertscore_f1={summary['trials/mean_bertscore_f1']:.4f} "
+            f"Summary of trials: bertscore_f1={summary['trials/mean_bertscore_f1']:.4f} "
             f"(±{summary['trials/std_bertscore_f1']:.4f})  "
             f"meteor={summary['trials/mean_meteor']:.4f} "
             f"(±{summary['trials/std_meteor']:.4f})"
