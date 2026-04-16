@@ -1,8 +1,11 @@
 """
-Baseline: few-shot style prompt generation using TinyLlama via HuggingFace transformers.
-Samples 3 random chains from ConvoStyleDataset to use as in-context examples,
-then predicts the style for a query chain's final utterance.
+baseline.py  --h5_path ...  --meta_path ...  --sweep_values sweep_values.json
+             [--sweep_id <ID>] [--count N] [options]
+
+Runs a W&B sweep of the few-shot LLM baseline for style prompt prediction.
+Multiple agents can join the same sweep via --sweep_id.
 """
+
 
 import os
 import json
@@ -10,21 +13,25 @@ import random
 import gc
 import textwrap
 import argparse
+from copy import deepcopy
 import numpy as np
-import pandas as pd 
+import pandas as pd
 
 import torch
+import wandb
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from dataset.ConvoStyleDataset import ConvoStyleDataset
-
 from model.train_helpers import compute_bertscore, compute_meteor, compute_chrf
-
 from tqdm import tqdm
 
 
-LLM_REPO = "meta-llama/Llama-3.2-3B-Instruct"  
+LLM_REPO       = "meta-llama/Llama-3.2-3B-Instruct"
 LLM_DIM  = 3072  # must match model's hidden_size
+
+WANDB_PROJECT  = "style-prompt-gen"
+WANDB_ENTITY   = "jdm8943-rochester-institute-of-technology"
+
 
 
 
@@ -120,47 +127,6 @@ def build_user_prompt(query_chain: list) -> str:
 
 
 
-# wandb helpers
-
-def wandb_init(cfg: dict, run_name):
-    if not USE_WANDB:
-        return None
-    try:
-        import wandb
-    except ImportError:
-        print("wandb not installed -- skipping W&B tracking.")
-        return None
-    api_key = os.environ.get("WANDB_API_KEY")
-    if not api_key:
-        print("WANDB_API_KEY not set -- skipping W&B tracking.")
-        return None
-    wandb.login(key=api_key, relogin=False)
-    try:
-        run = wandb.init(
-            project=WANDB_PROJECT,
-            entity=WANDB_ENTITY,
-            name=run_name,
-            config=cfg,
-        )
-        print(f"W&B run: {run.url}")
-        return run
-    except Exception as e:
-        print(f"W&B init failed ({e}) -- continuing without tracking.")
-        return None
-
-
-def wandb_log(metrics: dict, run):
-    if run is not None:
-        run.log(metrics)
-
-
-def wandb_finish(run):
-    if run is not None:
-        run.finish()
-
-
-
-
 def load_llm(device: str, repo: str = LLM_REPO):
     tokenizer = AutoTokenizer.from_pretrained(repo)
     model = AutoModelForCausalLM.from_pretrained(repo, torch_dtype=torch.bfloat16)
@@ -211,22 +177,19 @@ def batch_query_llm(
 
 
 
-def main(
-    h5_path: str,
-    meta_path: str,
-    num_turns: int = 5,
-    num_few_shot: int = 3,
-    num_eval_samples: int = 50,
-    max_new_tokens: int = 80,
-    inference_batch_size: int = 8,
-    max_len_sec: int = 15,
-    seed: int = 42,
-    llm_repo: str = LLM_REPO,
-    output_path: str = "baseline_outputs.json",
-    run_name: str = WANDB_RUN_NAME,
-    data_source: str = "both",
-):
-
+def run_baseline(cfg: dict, run) -> dict:
+    seed                = cfg["seed"]
+    h5_path             = cfg["h5_path"]
+    meta_path           = cfg["meta_path"]
+    num_turns           = cfg["num_turns"]
+    num_few_shot        = cfg["num_few_shot"]
+    num_eval_samples    = cfg["num_eval_samples"]
+    max_new_tokens      = cfg["max_new_tokens"]
+    inference_batch_size = cfg["inference_batch_size"]
+    max_len_sec         = cfg["max_len_sec"]
+    llm_repo            = cfg.get("llm_repo", LLM_REPO)
+    data_source         = cfg.get("data_source", "both")
+    output_path         = f"baseline_outputs_{run.id}.json" if run else cfg.get("output_path", "baseline_outputs.json")
 
     random.seed(seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -234,7 +197,6 @@ def main(
     print("Loading dataset...")
     ds = load_dataset(h5_path, meta_path, num_turns, max_len_sec)
     print(f"  {len(ds)} chains available")
-
 
     meta_df = pd.read_parquet(meta_path)
 
@@ -246,11 +208,11 @@ def main(
         rng_test.shuffle(other_ids)
         test_ids     = set(other_ids)
         print(
-            f"  {len(source_ids)} {data_source} conv_ids for train/few-shot  |  "
+            f"  {len(source_ids)} {data_source} conv_ids for few-shot pool  |  "
             f"{len(test_ids)} {other_source} conv_ids for test (cross-dataset)"
         )
     else:
-        source_ids   = None  # all sources used for train
+        source_ids   = None
         all_conv_ids = np.array(meta_df["conv_id"].unique())
         rng_split    = np.random.default_rng(seed)
         shuffled_all = all_conv_ids.copy()
@@ -258,7 +220,6 @@ def main(
         n_test   = max(1, int(len(shuffled_all) * 0.10))
         test_ids = set(shuffled_all[:n_test])
         print(f"  Test split: {len(test_ids)} conv_ids (10% held-out, seed={seed})")
-
 
     def has_valid_styles(chain):
         return all(
@@ -271,15 +232,12 @@ def main(
         i for i, chain in enumerate(ds._chains)
         if chain[-1].get("conv_id") in test_ids and has_valid_styles(chain)
     ]
-
-    # few-shot pool: exclude test split; if data_source != "both", restrict to that source only
     train_indices = [
         i for i, chain in enumerate(ds._chains)
         if chain[-1].get("conv_id") not in test_ids
         and (source_ids is None or chain[-1].get("conv_id") in source_ids)
         and has_valid_styles(chain)
     ]
-
 
     query_indices = random.sample(test_indices, min(num_eval_samples, len(test_indices)))
     print(f"\n{len(query_indices)} query chains sampled for evaluation.")
@@ -288,27 +246,8 @@ def main(
     print(f"\nLoading LLM on {device}...")
     tokenizer, model = load_llm(device, repo=llm_repo)
 
-    wandb_run = wandb_init({
-        "model":            llm_repo,
-        "num_turns":        num_turns,
-        "num_few_shot":     num_few_shot,
-        "num_eval_samples": num_eval_samples,
-        "max_new_tokens":   max_new_tokens,
-        "max_len_sec":      max_len_sec,
-        "seed":             seed,
-        "data_source":      data_source,
-    }, run_name)
-
-
-
-    all_preds, all_refs = [], []
-    records = []
-
-
-     # build all prompts up front
     full_prompts, ground_truths, meta = [], [], []
     for qi in tqdm(query_indices, desc="Building prompts"):
-
         few_shot_chains = [ds[i] for i in random.sample(train_indices, num_few_shot)]
         system_prompt   = build_system_prompt(few_shot_chains)
         query_chain     = ds[qi]
@@ -316,83 +255,142 @@ def main(
         full_prompts.append(f"{system_prompt}\n\n---\n\n{user_prompt}")
         ground_truths.append(query_chain[-1].get("text_description", "").strip())
         meta.append({"index": qi, "system_prompt": system_prompt, "user_prompt": user_prompt})
-        
-    # batch inference
+
     print(f"\nRunning batched inference over {len(full_prompts)} prompts...")
-    predictions = batch_query_llm(tokenizer, model, full_prompts, device
-                                  , max_new_tokens, batch_size=inference_batch_size)
+    predictions = batch_query_llm(tokenizer, model, full_prompts, device, max_new_tokens, batch_size=inference_batch_size)
 
     del model, tokenizer
     gc.collect()
     if device == "cuda":
         torch.cuda.empty_cache()
 
-    # collect results 
     all_preds, all_refs = [], []
     records = []
     for idx, (pred, gt, m) in enumerate(zip(predictions, ground_truths, meta)):
         records.append({**m, "prediction": pred, "ground_truth": gt})
         all_preds.append(pred)
         all_refs.append(gt)
-        print(f"\n[{idx+1}/{len(query_indices)}]")
-        print(f"  Predicted : {pred}")
-        print(f"  Reference : {gt}")
-
+        print(f"\n[{idx+1}/{len(query_indices)}]  Predicted: {pred}\n  Reference: {gt}")
 
     with open(output_path, "w") as f:
         json.dump(records, f, indent=2)
     print(f"\nSaved {len(records)} inference records to {output_path}")
 
-    print("\n" + "="*60)
-    print("EVALUATION METRICS")
-    print("="*60)
-
     bs_metrics   = compute_bertscore(all_preds, all_refs, device=device)
     met_metrics  = compute_meteor(all_preds, all_refs)
     chrf_metrics = compute_chrf(all_preds, all_refs)
 
-    print(f"BERTScore F1  : {bs_metrics['bertscore_f1_mean']:.4f} (±{bs_metrics['bertscore_f1_std']:.4f})")
-    print(f"BERTScore P   : {bs_metrics['bertscore_precision_mean']:.4f} (±{bs_metrics['bertscore_precision_std']:.4f})")
-    print(f"BERTScore R   : {bs_metrics['bertscore_recall_mean']:.4f} (±{bs_metrics['bertscore_recall_std']:.4f})")
-    print(f"METEOR        : {met_metrics['meteor_mean']:.4f} (±{met_metrics['meteor_std']:.4f})")
-    print(f"ChrF++        : {chrf_metrics['chrf_mean']:.4f} (±{chrf_metrics['chrf_std']:.4f})")
+    print(f"BERTScore F1 : {bs_metrics['bertscore_f1_mean']:.4f}")
+    print(f"METEOR       : {met_metrics['meteor_mean']:.4f}")
+    print(f"ChrF++       : {chrf_metrics['chrf_mean']:.4f}")
 
-    wandb_log({**bs_metrics, **met_metrics, **chrf_metrics}, wandb_run)
-    wandb_finish(wandb_run)
+    results = {**bs_metrics, **met_metrics, **chrf_metrics}
+    if run:
+        run.log(results)
 
     gc.collect()
     if device == "cuda":
         torch.cuda.empty_cache()
 
+    return results
 
-    return {**bs_metrics, **met_metrics, **chrf_metrics}
+
+
+
+def _make_sweep_fn(base_cfg: dict):
+    def sweep_fn():
+        gc.collect()
+        run = wandb.init(settings=wandb.Settings(console="off"))
+        cfg = deepcopy(base_cfg)
+        for key, val in run.config.items():
+            cfg[key] = val
+        print(f"Run config: {json.dumps(cfg, indent=2, default=str)}")
+        results = run_baseline(cfg, run)
+        run.summary.update(results)
+        run.finish()
+    return sweep_fn
+
+
+def create_sweep(sweep_values, project: str = WANDB_PROJECT, entity: str = WANDB_ENTITY) -> str:
+    """Create a W&B sweep and return the sweep ID.
+
+    sweep_values: path to a sweep JSON file, or an already-loaded dict.
+    """
+    if isinstance(sweep_values, str):
+        with open(sweep_values) as f:
+            sweep_values = json.load(f)
+    sweep_id = wandb.sweep(deepcopy(sweep_values), project=project, entity=entity)
+    print(f"Created sweep: {sweep_id}")
+    return sweep_id
+
+
+def run_agent(
+    base_cfg: dict,
+    sweep_id: str,
+    project: str = WANDB_PROJECT,
+    entity: str = WANDB_ENTITY,
+    count: int = None,
+):
+    """Run a sweep agent against an existing sweep (blocking).
+
+    Intended for notebook use — call from separate cells or threads.
+    base_cfg should contain all fixed params (h5_path, meta_path, seed, etc.).
+    """
+    sweep_fn = _make_sweep_fn(base_cfg)
+    wandb.agent(sweep_id, function=sweep_fn, count=count, project=project, entity=entity)
 
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Few-shot LLM baseline for style prompt prediction.")
-    p.add_argument("--h5_path",          required=True,              help="Path to merged_audio.h5")
-    p.add_argument("--meta_path",        required=True,              help="Path to merged_metadata.parquet")
-    p.add_argument("--num_turns",        type=int,   default=5,      help="Conversation chain length (default: 5)")
-    p.add_argument("--num_few_shot",     type=int,   default=3,      help="Number of in-context examples (default: 3)")
-    p.add_argument("--num_eval_samples", type=int,   default=50,     help="Number of query chains to evaluate (default: 50)")
-    p.add_argument("--max_new_tokens",   type=int,   default=80,     help="Max tokens to generate per prediction (default: 80)")
-    p.add_argument("--inference_batch_size",   type=int,   default=8,     help="Size of prompt batch to run inference. Adjust for VRAM constraints.")
-    p.add_argument("--max_len_sec",      type=int,   default=15,     help="Max audio length in seconds (default: 15)")
-    p.add_argument("--data_source", type=str, default="both",
-                   choices=["both", "styletalk", "expresso"],
-                   help="Dataset source for train/few-shot pool. 'both' uses a 10%% held-out test split; "
-                        "'styletalk' or 'expresso' trains on that source and tests cross-dataset on the other.")
-
-    p.add_argument("--llm_repo", type=str, default=LLM_REPO, help="HuggingFace repo for the LLM (default: Llama 3.2 3B)")
-    p.add_argument("--run_name", type=str, default=WANDB_RUN_NAME, help=f"W&B run name for online logging. Default: {WANDB_RUN_NAME}")
-
-
-    p.add_argument("--seed",             type=int,   default=42,     help="Random seed (default: 42)")
-    p.add_argument("--output_path", type=str, default="baseline_outputs.json",
-            help="Path to save per-inference JSON output (default: baseline_outputs.json)")
-
+    p = argparse.ArgumentParser(description="W&B sweep of the few-shot LLM baseline.")
+    # required fixed params
+    p.add_argument("--h5_path",              required=True,              help="Path to merged_audio.h5")
+    p.add_argument("--meta_path",            required=True,              help="Path to merged_metadata.parquet")
+    p.add_argument("--sweep_values",         required=True,              help="W&B sweep search-space JSON")
+    # sweep control
+    p.add_argument("--sweep_id",             default=None,               help="Join an existing sweep instead of creating one")
+    p.add_argument("--count",                type=int,   default=None,   help="Max trials this agent will run (default: unlimited)")
+    # fixed hyperparams (not swept unless added to sweep_values.json)
+    p.add_argument("--num_turns",            type=int,   default=5)
+    p.add_argument("--num_few_shot",         type=int,   default=3)
+    p.add_argument("--num_eval_samples",     type=int,   default=50)
+    p.add_argument("--max_new_tokens",       type=int,   default=80)
+    p.add_argument("--inference_batch_size", type=int,   default=8)
+    p.add_argument("--max_len_sec",          type=int,   default=15)
+    p.add_argument("--seed",                 type=int,   default=42)
+    p.add_argument("--llm_repo",             type=str,   default=LLM_REPO)
+    p.add_argument("--data_source",          type=str,   default="both",  choices=["both", "styletalk", "expresso"])
+    # wandb
+    p.add_argument("--wandb_project",        type=str,   default=WANDB_PROJECT)
+    p.add_argument("--wandb_entity",         type=str,   default=WANDB_ENTITY)
     return p.parse_args()
+
+
+
+def main():
+    args = parse_args()
+    cfg  = vars(args)
+
+    sweep_values_path = cfg.pop("sweep_values")
+    sweep_id_arg      = cfg.pop("sweep_id")
+    count             = cfg.pop("count")
+    project           = cfg.pop("wandb_project")
+    entity            = cfg.pop("wandb_entity")
+
+    with open(sweep_values_path) as f:
+        sweep_config = json.load(f)
+
+    sweep_fn = _make_sweep_fn(cfg)
+
+    if sweep_id_arg:
+        sweep_id = sweep_id_arg
+        print(f"Joining existing sweep: {sweep_id}")
+    else:
+        sweep_id = wandb.sweep(sweep_config, project=project, entity=entity)
+        print(f"Created sweep: {sweep_id}")
+
+    wandb.agent(sweep_id, function=sweep_fn, count=count, project=project, entity=entity)
+
 
 
 if __name__ == "__main__":
