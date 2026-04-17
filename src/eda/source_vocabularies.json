@@ -1,64 +1,188 @@
 {
   "expresso": {
     "american": {
-      "category": "accent"
+      "category": [
+        "accent",
+        "intrinsic_tags"
+      ]
+    },
+    "authoritative": {
+      "category": [
+        "intrinsic_tags"
+      ]
+    },
+    "booming": {
+      "category": [
+        "intrinsic_tags"
+      ]
+    },
+    "clean environment": {
+      "category": [
+        "noise"
+      ]
+    },
+    "crisp": {
+      "category": [
+        "intrinsic_tags"
+      ]
+    },
+    "enunciated": {
+      "category": [
+        "intrinsic_tags"
+      ]
+    },
+    "environment balanced in clarity": {
+      "category": [
+        "noise"
+      ]
     },
     "fast speed": {
-      "category": "speaking_rate"
+      "category": [
+        "speaking_rate"
+      ]
     },
     "female": {
-      "category": "gender"
+      "category": [
+        "gender"
+      ]
+    },
+    "flowing": {
+      "category": [
+        "intrinsic_tags"
+      ]
     },
     "high-pitched": {
-      "category": "pitch"
+      "category": [
+        "pitch"
+      ]
+    },
+    "loud": {
+      "category": [
+        "intrinsic_tags"
+      ]
     },
     "male": {
-      "category": "gender"
+      "category": [
+        "gender"
+      ]
     },
     "measured speed": {
-      "category": "speaking_rate"
+      "category": [
+        "speaking_rate"
+      ]
+    },
+    "nasal": {
+      "category": [
+        "intrinsic_tags"
+      ]
+    },
+    "noisy environment": {
+      "category": [
+        "noise"
+      ]
+    },
+    "shrill": {
+      "category": [
+        "intrinsic_tags"
+      ]
+    },
+    "silky": {
+      "category": [
+        "intrinsic_tags"
+      ]
+    },
+    "singsong": {
+      "category": [
+        "intrinsic_tags"
+      ]
+    },
+    "slightly clean environment": {
+      "category": [
+        "noise"
+      ]
+    },
+    "slightly noisy environment": {
+      "category": [
+        "noise"
+      ]
     },
     "slow speed": {
-      "category": "speaking_rate"
+      "category": [
+        "speaking_rate"
+      ]
+    },
+    "very clean environment": {
+      "category": [
+        "noise"
+      ]
+    },
+    "very noisy environment": {
+      "category": [
+        "noise"
+      ]
     }
   },
   "styletalk": {
     "cheerful": {
-      "category": "emotion"
+      "category": [
+        "emotion"
+      ]
     },
     "excited": {
-      "category": "emotion"
+      "category": [
+        "emotion"
+      ]
     },
     "fast": {
-      "category": "speed"
+      "category": [
+        "speaking_rate"
+      ]
     },
     "friendly": {
-      "category": "emotion"
+      "category": [
+        "emotion"
+      ]
     },
     "hopeful": {
-      "category": "emotion"
+      "category": [
+        "emotion"
+      ]
     },
     "loud": {
-      "category": "volume"
+      "category": [
+        "volume"
+      ]
     },
     "neutral": {
-      "category": "emotion"
+      "category": [
+        "emotion"
+      ]
     },
     "normal": {
-      "category": "volume",
-      "category2": "speed"
+      "category": [
+        "volume",
+        "speaking_rate"
+      ]
     },
     "quiet": {
-      "category": "volume"
+      "category": [
+        "volume"
+      ]
     },
     "sad": {
-      "category": "emotion"
+      "category": [
+        "emotion"
+      ]
     },
     "slow": {
-      "category": "speed"
+      "category": [
+        "speaking_rate"
+      ]
     },
     "unfriendly": {
-      "category": "emotion"
+      "category": [
+        "emotion"
+      ]
     }
   }
 }
