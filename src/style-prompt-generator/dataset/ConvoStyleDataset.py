@@ -15,6 +15,13 @@ _TEXT_ONLY_SOURCES = {"styletalk"}
 _STYLETALK_TEXT_ONLY_TURNS = 3
 
 
+# Define test set
+_TEST_SEED                = 999
+_TEST_NUM_TURNS           = 5
+_TEST_N_CHAINS_PER_SOURCE = 150  # 150 × n_sources ≈ 300 total chains held out
+
+
+
 class ConvoStyleDataset(Dataset):
     """
     Streams waveforms from HDF5 alongside metadata. Each item is a
@@ -233,6 +240,86 @@ class ConvoStyleDataset(Dataset):
         train_ds = cls(**kwargs, allowed_conv_ids=train_ids)
         val_ds   = cls(**kwargs, allowed_conv_ids=val_ids)
         return train_ds, val_ds
+    
+    
+    @classmethod
+    def make_fixed_test_split(
+        cls,
+        h5_path:      str,
+        meta_path:    str,
+        meta_columns: Optional[List[str]] = None,
+        max_len_sec:  Optional[float]     = None,
+        sample_rate:  int                 = 16_000,
+    ) -> tuple:
+        """
+        Deterministically carves out test chains using _TEST_* constants.
+        Chain selection is at the chain level (not conversation level), so the
+        same chains are held out regardless of the num_turns used during training.
+
+        Returns:
+            chains_by_source  – dict[str, list[chain]] of fixed test chains
+            test_conv_ids     – set of conv_ids to exclude from train/val
+        """
+        full_ds = cls(
+            h5_path=h5_path,
+            meta_path=meta_path,
+            meta_columns=meta_columns,
+            max_len_sec=max_len_sec,
+            sample_rate=sample_rate,
+            num_turns=_TEST_NUM_TURNS,
+        )
+
+        chains_by_source: dict = {}
+        for chain in full_ds._chains:
+            src = str(chain[-1].get("source", "unknown")).lower()
+            chains_by_source.setdefault(src, []).append(chain)
+
+        rng   = np.random.default_rng(_TEST_SEED)
+        fixed: dict = {}
+        for src in sorted(chains_by_source):          # sorted → reproducible rng order
+            chains = chains_by_source[src]
+            idxs   = np.arange(len(chains))
+            rng.shuffle(idxs)
+            n = min(_TEST_N_CHAINS_PER_SOURCE, len(idxs))
+            fixed[src] = [chains[i] for i in idxs[:n]]
+
+        test_conv_ids = {
+            chain[0]["conv_id"]
+            for chains in fixed.values()
+            for chain in chains
+        }
+        return fixed, test_conv_ids
+
+
+    @classmethod
+    def from_prebuilt_chains(
+        cls,
+        chains:       list,
+        h5_path:      str,
+        meta_columns: Optional[List[str]] = None,
+        max_len_sec:  Optional[float]     = None,
+        sample_rate:  int                 = 16_000,
+    ) -> "ConvoStyleDataset":
+        """Construct a dataset from pre-built chains (used for the fixed test split)."""
+        ds           = cls.__new__(cls)
+        ds.h5_path   = Path(h5_path)
+        ds.sr        = int(sample_rate)
+        ds.max_len   = int(float(max_len_sec) * ds.sr) if max_len_sec else None
+        ds.num_turns = len(chains[0]) if chains else 0
+        ds.transform = None
+        ds._chains   = chains
+        ds._h5       = None
+
+        required = {"hdf5_idx", "relative_audio_path", "prev_filename", "turn_index"}
+        if meta_columns is not None:
+            ds._extra_cols = [c for c in meta_columns if c not in required]
+        elif chains:
+            ds._extra_cols = [c for c in chains[0][0].index if c not in required]
+        else:
+            ds._extra_cols = []
+
+        return ds
+
 
 
 

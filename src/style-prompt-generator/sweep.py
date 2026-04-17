@@ -59,51 +59,8 @@ logging.getLogger("transformers").setLevel(logging.WARNING)
 logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 
 
-TEST_SPLIT_SEED = 42
-TEST_SPLIT_SIZE = 300
 
 # Data helpers 
-
-def _get_conv_ids(meta_path: str) -> dict:
-    meta = pd.read_parquet(meta_path, columns=["conv_id", "source"])
-    return {
-        src: np.array(grp["conv_id"].unique())
-        for src, grp in meta.groupby("source")
-    }
-
-
-
-
-def _carve_data_splits(conv_ids_by_source: dict):
-    rng   = np.random.default_rng(TEST_SPLIT_SEED)
-    total = sum(len(ids) for ids in conv_ids_by_source.values())
-    n_test       = TEST_SPLIT_SIZE
-    n_per_source = n_test // 2
-
-    test_ids_by_source = {}
-    trainval_parts     = []
-    for src, ids in conv_ids_by_source.items():
-        shuffled = ids.copy()
-        rng.shuffle(shuffled)
-        n = min(n_per_source, len(shuffled))
-        test_ids_by_source[src] = set(shuffled[:n])
-        trainval_parts.append(shuffled[n:])
-
-    trainval_arr   = np.concatenate(trainval_parts)
-    source_summary = "  |  ".join(
-        f"{src}: {len(ids)}" for src, ids in test_ids_by_source.items()
-    )
-    log.info(
-        f"{total} unique conversations → "
-        f"{len(trainval_arr)} train/val  |  "
-        f"{sum(len(ids) for ids in test_ids_by_source.values())} test (held-out) "
-        f"[{source_summary}]"
-    )
-    return trainval_arr, test_ids_by_source
-
-
-
-
 
 
 def _build_fold_loaders(cfg: dict, train_ids: set, val_ids: set):
@@ -221,27 +178,25 @@ def _flatten(d: dict) -> dict:
 def _eval_test_by_source(
     model,
     cfg: dict,
-    test_ids_by_source: dict,
+    test_chains_by_source: dict,   # dict[src, list[chain]] from make_fixed_test_split
     device: torch.device,
 ) -> dict:
-    """Evaluate model on each source's test set; returns per-source metrics only."""
-    ds_kwargs = dict(
-        h5_path=cfg["h5_path"],
-        meta_path=cfg["meta_path"],
-        meta_columns=["transcription", "text_description"],
-        sample_rate=cfg["sample_rate"],
-        num_turns=cfg["num_turns"],
-        max_len_sec=cfg["max_len_sec"],
-    )
+    """Evaluate model on each source's fixed test chains; returns per-source metrics."""
     loader_kw = dict(collate_fn=collate_pad, num_workers=cfg["num_workers"], pin_memory=True)
 
     source_metrics = {}
 
-    for src, src_test_ids in test_ids_by_source.items():
-        test_ds     = ConvoStyleDataset(**ds_kwargs, allowed_conv_ids=src_test_ids)
+    for src, src_chains in test_chains_by_source.items():
+        test_ds = ConvoStyleDataset.from_prebuilt_chains(
+            chains=src_chains,
+            h5_path=cfg["h5_path"],
+            meta_columns=["transcription", "text_description"],
+            sample_rate=cfg["sample_rate"],
+            max_len_sec=cfg["max_len_sec"],
+        )
         test_loader = DataLoader(test_ds, batch_size=cfg["batch_size"], shuffle=False, **loader_kw)
-
         all_preds, all_refs, all_texts, all_vecs = [], [], [], []
+
 
         with torch.no_grad():
             for batch in test_loader:
@@ -321,15 +276,29 @@ def _eval_test_by_source(
 def _train_final_and_eval_test(
     cfg: dict,
     trainval_ids: set,
-    test_ids_by_source: dict,
+    test_chains_by_source: dict,
     sweep_run,
     device: torch.device,
     global_step: int = 0,
 ) -> dict:
-    """Train on all train/val data, then evaluate per source on the held-out test split."""
+    """Train on all train/val data, then evaluate per source on the held-out test chains."""
     set_seed(cfg["seed"])
-    all_test_ids = set().union(*test_ids_by_source.values())
-    train_loader, _ = _build_fold_loaders(cfg, trainval_ids, all_test_ids)
+
+    # Build data loaders
+    ds_kwargs = dict(
+        h5_path=cfg["h5_path"],
+        meta_path=cfg["meta_path"],
+        meta_columns=["transcription", "text_description", "source"],
+        sample_rate=cfg["sample_rate"],
+        num_turns=cfg["num_turns"],
+        max_len_sec=cfg["max_len_sec"],
+    )
+    loader_kw  = dict(collate_fn=collate_pad, num_workers=cfg["num_workers"], pin_memory=True)
+    g          = torch.Generator().manual_seed(cfg["seed"])
+    train_ds   = ConvoStyleDataset(**ds_kwargs, allowed_conv_ids=trainval_ids)
+    train_loader = DataLoader(train_ds, batch_size=cfg["batch_size"], shuffle=True, generator=g, **loader_kw)
+
+
     model = build_model(cfg, device, log)
 
     total_steps = len(train_loader) * cfg["num_epochs"]
@@ -344,7 +313,7 @@ def _train_final_and_eval_test(
 
     model.eval()
     metrics = _eval_test_by_source(
-        model, cfg, test_ids_by_source, device
+        model, cfg, test_chains_by_source, device
     )
 
 
@@ -388,8 +357,16 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int, overrides: list | None = None):
         log.info(f"Run config: {json.dumps(cfg, indent=2, default=str)}")
 
 
-        raw_conv_ids           = _get_conv_ids(cfg["meta_path"])
-        trainval_arr, test_ids = _carve_data_splits(raw_conv_ids)
+        test_chains_by_source, test_conv_ids = ConvoStyleDataset.make_fixed_test_split(
+            h5_path=cfg["h5_path"],
+            meta_path=cfg["meta_path"],
+            meta_columns=["transcription", "text_description", "source"],
+            sample_rate=cfg["sample_rate"],
+            max_len_sec=cfg["max_len_sec"],
+        )
+        meta         = pd.read_parquet(cfg["meta_path"], columns=["conv_id"])
+        trainval_arr = np.array([c for c in meta["conv_id"].unique() if c not in test_conv_ids])
+
 
 
         rng      = np.random.default_rng(cfg["seed"])
@@ -447,7 +424,10 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int, overrides: list | None = None):
 
 
         
-        test_metrics, global_step = _train_final_and_eval_test(cfg, trainval_ids, test_ids, run, device, global_step)
+        test_metrics, global_step = _train_final_and_eval_test(
+            cfg, trainval_ids, test_chains_by_source, run, device, global_step
+        )
+
         
         for src, src_m in test_metrics.items():
             log.info(
