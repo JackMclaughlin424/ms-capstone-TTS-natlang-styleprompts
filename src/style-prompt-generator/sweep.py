@@ -210,13 +210,17 @@ def _train_fold(
     }, global_step
 
 
+def _flatten(d: dict) -> dict:
+    """Strip _mean suffix → bare name; keep _std keys as-is."""
+    return {(k[:-5] if k.endswith("_mean") else k): v for k, v in d.items()}
+
+
+
 def _eval_test_by_source(
     model,
     cfg: dict,
     test_ids_by_source: dict,
     device: torch.device,
-    sweep_run,
-    global_step: int,
 ) -> dict:
     """Evaluate model on each source's test set; returns per-source metrics only."""
     ds_kwargs = dict(
@@ -277,11 +281,6 @@ def _eval_test_by_source(
         n        = sim_mat.shape[0]
         off_diag = sim_mat[~torch.eye(n, dtype=torch.bool)].mean().item()
 
-        wandb_log({
-            f"test/{src}/vec_std":          vec_std,
-            f"test/{src}/vec_norm_cv":      vec_norm_cv,
-            f"test/{src}/mean_cosine_sim":  off_diag,   # target: low (< 0.5); alarm: > 0.9
-        }, step=global_step, run=sweep_run)
         del all_vecs, vecs
         
         bs   = compute_bertscore(all_preds, all_refs, device=str(device))
@@ -290,21 +289,18 @@ def _eval_test_by_source(
         rou  = compute_rouge(all_preds, all_refs)
         tf1  = compute_tag_f1(all_preds, all_refs, src)
 
-        wandb_log({
-            f"test/{src}/bertscore_f1":   bs["bertscore_f1_mean"],
-            f"test/{src}/meteor":         met["meteor_mean"],
-            f"test/{src}/chrf":           chrf["chrf_mean"],
-            f"test/{src}/rougeL":         rou["rougeL_mean"],
-            **{f"test/{src}/{k[:-5]}": v for k, v in tf1.items() if k.endswith("_mean")},
-        }, step=global_step, run=sweep_run)
-
+        # automate logging of lots of metrics
         source_metrics[src] = {
-            "bertscore_f1":   bs["bertscore_f1_mean"],
-            "meteor":         met["meteor_mean"],
-            "chrf":           chrf["chrf_mean"],
-            "rougeL":         rou["rougeL_mean"],
-            "tag_f1_overall": tf1["tag_f1_overall_mean"],
+            **_flatten(bs),
+            **_flatten(met),
+            **_flatten(chrf),
+            **_flatten(rou),
+            **_flatten(tf1),
+            "vec_std":         vec_std,
+            "vec_norm_cv":     vec_norm_cv,
+            "mean_cosine_sim": off_diag,
         }
+
 
 
         for i, (pred, ref, txt) in enumerate(zip(all_preds[:3], all_refs[:3], all_texts[:3])):
@@ -345,7 +341,7 @@ def _train_final_and_eval_test(
 
     model.eval()
     metrics = _eval_test_by_source(
-        model, cfg, test_ids_by_source, device, sweep_run, global_step
+        model, cfg, test_ids_by_source, device
     )
 
 
@@ -392,21 +388,28 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int):
         rng      = np.random.default_rng(cfg["seed"])
         shuffled = trainval_arr.copy()
         rng.shuffle(shuffled)
-        folds = np.array_split(shuffled, n_folds)
+
+        if n_folds <= 1:
+            # 80/20 single-fold fallback — avoids degenerate empty train/val split
+            split = int(len(shuffled) * 0.8)
+            fold_splits = [(set(shuffled[:split]), set(shuffled[split:]))]
+        else:
+            chunks = np.array_split(shuffled, n_folds)
+            fold_splits = [
+                (set(np.concatenate([chunks[j] for j in range(n_folds) if j != i])), set(chunks[i]))
+                for i in range(n_folds)
+            ]
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         global_step = 0
         fold_metrics = []
-        for fold_idx in range(n_folds):
-            log.info(f"=== Fold {fold_idx + 1}/{n_folds} ===")
-            val_ids   = set(folds[fold_idx])
-            train_ids = set(np.concatenate([folds[j] for j in range(n_folds) if j != fold_idx]))
-            metrics, global_step   = _train_fold(cfg, train_ids, val_ids, fold_idx, run, device, global_step)
+        for fold_idx, (train_ids, val_ids) in enumerate(fold_splits):
+            log.info(f"=== Fold {fold_idx + 1}/{len(fold_splits)} ===")
+            metrics, global_step = _train_fold(cfg, train_ids, val_ids, fold_idx, run, device, global_step)
             fold_metrics.append(metrics)
-            log.info(
-                f"Fold {fold_idx + 1}  val_loss={metrics['val_loss']:.4f}  "
-            )
+            log.info(f"Fold {fold_idx + 1}  val_loss={metrics['val_loss']:.4f}  ")
+
 
         # aggregate across folds (the sweep optimises this)
         val_losses    = [m["val_loss"]     for m in fold_metrics]
@@ -417,17 +420,25 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int):
         mean_best_epoch = int(round(np.mean([m["best_epoch"] for m in fold_metrics])))
         log.info(f"Mean best epoch across folds: {mean_best_epoch}")
 
-        summary = {
+        cv_summary = {
             "cv/mean_val_loss":      float(np.mean(val_losses)),
             "cv/std_val_loss":       float(np.std(val_losses)),
             "cv/mean_best_epoch":    float(np.mean(best_epochs)),
             "cv/std_best_epoch":     float(np.std(best_epochs)),
         }
 
+        wandb_log(cv_summary, step=global_step, run=run)
+        log.info(
+            f"CV summary  mean_val_loss={cv_summary['cv/mean_val_loss']:.4f} "
+            f"(±{cv_summary['cv/std_val_loss']:.4f})  "
+            f"mean_best_epoch={cv_summary['cv/mean_best_epoch']:.1f}"
+        )
 
         # held-out test evaluation (train on all trainval, eval on test) 
         log.info("=== Final model: training on all train/val folds for test eval ===")
-        trainval_ids = set(np.concatenate(folds))
+        trainval_ids = set(shuffled)
+
+
         
         test_metrics, global_step = _train_final_and_eval_test(cfg, trainval_ids, test_ids, run, device, global_step)
 
@@ -437,22 +448,13 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int):
                 f"meteor={src_m['meteor']:.4f}  chrf={src_m['chrf']:.4f}  "
                 f"tag_f1={src_m['tag_f1_overall']:.4f}"
             )
-            summary.update({
-                f"test/{src}/bertscore_f1":   src_m["bertscore_f1"],
-                f"test/{src}/meteor":         src_m["meteor"],
-                f"test/{src}/chrf":           src_m["chrf"],
-                f"test/{src}/rougeL":         src_m["rougeL"],
-                f"test/{src}/tag_f1_overall": src_m["tag_f1_overall"],
-            })
+            
+            test_summary = {f"test/{src}/{k}": v for k, v in src_m.items()}
 
-        run.summary.update(summary)
-        wandb_log(summary, step=global_step, run=run)
 
-        log.info(
-            f"CV summary  mean_val_loss={summary['cv/mean_val_loss']:.4f} "
-            f"(±{summary['cv/std_val_loss']:.4f})  "
-            f"mean_best_epoch={summary['cv/mean_best_epoch']:.1f}"
-        )
+        run.summary.update(test_summary)
+        wandb_log(test_summary, step=global_step, run=run)
+
 
         run.finish()
 
@@ -473,7 +475,8 @@ def main():
     parser.add_argument("--sweep_values", required=True,
                         help="W&B sweep search-space JSON (e.g. default_sweep_values.json).")
     parser.add_argument("--n_folds",     type=int, default=5,
-                        help="Number of CV folds (hyperparameter mode only, default: 5).")
+                        help="CV folds (default: 5). Use 1 for a single 80/20 holdout split.")
+
     parser.add_argument("--sweep_id",    default=None,
                         help="Short sweep ID to join an existing sweep instead of creating one.")
     parser.add_argument("--count",       type=int, default=None,
