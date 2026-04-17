@@ -37,7 +37,7 @@
     "early_stopping_patience": 3,
     "early_stopping_min_delta": 1e-3,
     "seed": 42,
-    "log_every_n_steps": 100,
+    "log_every_n_steps": 50,
     "_comment_param_section_wandb": "W&B settings",
     "wandb_project": "sweep-style-prompt-gen",
     "wandb_entity": "jdm8943-rochester-institute-of-technology"
