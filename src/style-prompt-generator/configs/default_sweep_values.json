@@ -20,18 +20,18 @@
             "min": 0.0,
             "max": 0.4
         },
-        "num_unfrozen_embedder_layers": {
+        "num_mapping_layers": {
             "values": [
-                0,
-                1,
-                2
+                2,
+                4,
+                8
             ]
         },
-        "system_prompt": {
+        "num_prefix_tokens": {
             "values": [
-                "",
-                "Speaking Style:",
-                "You are an assistant that autocompletes a style prompt for a user using instruction-guided text to speech. Given their dialogue history so far and the current script, produce the most appropriate style prompt for their next response. Speaking Style: "
+                5,
+                10,
+                20
             ]
         }
     }

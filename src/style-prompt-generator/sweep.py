@@ -408,10 +408,10 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int):
         global_step = 0
         fold_metrics = []
         for fold_idx, (train_ids, val_ids) in enumerate(fold_splits):
-            log.info(f"=== Fold {fold_idx + 1}/{len(fold_splits)} ===")
+            log.info(f"=== Fold {fold_idx}/{len(fold_splits)} ===")
             metrics, global_step = _train_fold(cfg, train_ids, val_ids, fold_idx, run, device, global_step)
             fold_metrics.append(metrics)
-            log.info(f"Fold {fold_idx + 1}  val_loss={metrics['val_loss']:.4f}  ")
+            log.info(f"Fold {fold_idx}  val_loss={metrics['val_loss']:.4f}  ")
 
 
         # aggregate across folds (the sweep optimises this)
