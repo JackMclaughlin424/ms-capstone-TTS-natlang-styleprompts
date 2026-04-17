@@ -6,7 +6,7 @@
     "max_len_sec": 15,
     "data_source": "both",
     "max_test_convos": 250,
-    "num_workers": 1,
+    "num_workers": 0,
     "num_turns": 5,
     "_comment_param_section_encoder": "Dialogue encoder parameters",
     "d_model": 768,
