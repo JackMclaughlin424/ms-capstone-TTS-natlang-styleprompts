@@ -107,7 +107,7 @@ def _train_fold(
 
     best: dict = {"val_loss": float("inf"), "epoch": -1}
     
-    fp = f"fold_{fold_idx}"
+    fp = f"fold_{fold_idx+1}"
 
     patience         = cfg.get("early_stopping_patience", 3)
     min_delta        = cfg.get("early_stopping_min_delta", 1e-4)
@@ -145,7 +145,7 @@ def _train_fold(
             epochs_no_improve += 1
 
         if patience > 0 and epoch >= MIN_EPOCH and epochs_no_improve >= patience:
-            log.info(f"  Fold {fold_idx}: early stop at epoch {epoch} (no improvement for {patience} evals)")
+            log.info(f"  Fold {fold_idx+1}: early stop at epoch {epoch+1} (no improvement for {patience} evals)")
             break
 
         gc.collect()
@@ -153,7 +153,7 @@ def _train_fold(
     elapsed = time.time() - fold_start_time
     fmt = lambda s: f"{int(s)//60:02d}:{int(s)%60:02d}"
     log.info(
-        f"Fold {fold_idx}: Trained for {epoch} epochs. Total time: {fmt(elapsed)}"
+        f"Fold {fold_idx+1}: Trained for {epoch+1} epochs. Total time: {fmt(elapsed)}"
         
     )
 
@@ -389,10 +389,10 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int, overrides: list | None = None):
         global_step = 0
         fold_metrics = []
         for fold_idx, (train_ids, val_ids) in enumerate(fold_splits):
-            log.info(f"=== Fold {fold_idx}/{len(fold_splits)} ===")
+            log.info(f"=== Fold {fold_idx+1}/{len(fold_splits)} ===")
             metrics, global_step = _train_fold(cfg, train_ids, val_ids, fold_idx, run, device, global_step)
             fold_metrics.append(metrics)
-            log.info(f"Fold {fold_idx}  val_loss={metrics['val_loss']:.4f}  ")
+            log.info(f"Fold {fold_idx+1}  val_loss={metrics['val_loss']:.4f}  ")
 
 
         # aggregate across folds (the sweep optimises this)
