@@ -33,8 +33,9 @@ from model.train_helpers import (
     load_config, apply_overrides, set_seed,
     build_model, build_optimizer_and_scheduler,
     wandb_log, compute_bertscore, compute_meteor,
-    compute_chrf, compute_rouge,
+    compute_chrf, compute_rouge, compute_tag_f1,
 )
+
 from train import run_epoch
 from dataset.ConvoStyleDataset import ConvoStyleDataset, collate_pad
 from torch.utils.data import DataLoader
@@ -109,11 +110,12 @@ def _build_fold_loaders(cfg: dict, train_ids: set, val_ids: set):
     ds_kwargs = dict(
         h5_path=cfg["h5_path"],
         meta_path=cfg["meta_path"],
-        meta_columns=["transcription", "text_description"],
+        meta_columns=["transcription", "text_description", "source"],
         sample_rate=cfg["sample_rate"],
         num_turns=cfg["num_turns"],
         max_len_sec=cfg["max_len_sec"],
     )
+
     train_ds = ConvoStyleDataset(**ds_kwargs, allowed_conv_ids=train_ids)
     val_ds   = ConvoStyleDataset(**ds_kwargs, allowed_conv_ids=val_ids)
 
@@ -195,80 +197,9 @@ def _train_fold(
     fmt = lambda s: f"{int(s)//60:02d}:{int(s)%60:02d}"
     log.info(
         f"Fold {fold_idx}: Trained for {epoch} epochs. Total time: {fmt(elapsed)}"
-        f"\nBeginning validation..."
+        
     )
 
-    # compute text-quality metrics once, on the final model state
-    model.eval()
-    all_preds, all_refs, all_texts, all_vecs = [], [], [], []
-
-    with torch.no_grad():
-        for batch in val_loader:
-            with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
-                audio       = batch["audio"].to(device)
-                lengths     = batch["lengths"].to(device)
-                text_only   = batch["text_only"].to(device)
-                texts       = batch["transcription"]
-                speaker_ids = batch["speaker_id"]
-                targets     = batch["text_description"]
-                if cfg["num_turns"] == 0:
-                    audio     = torch.zeros_like(audio)
-                    text_only = torch.ones_like(text_only)
-                ctx = model.scfa(audio, lengths, texts, speaker_ids, text_only)
-                vec = model.pooler(ctx)
-                del ctx
-                all_vecs.append(vec.float().detach().cpu())  # collect before delete
-                preds = model.style_generator.generate(vec)
-                del vec
-            
-            all_preds.extend(preds)
-            all_refs.extend([chain[-1] for chain in targets])
-            all_texts.extend(texts)
-
-    # free GPU memory before the next fold loads a fresh model
-    del train_loader, val_loader
-    del model, optimizer, scheduler
-    gc.collect()
-    torch.cuda.empty_cache()
-
-    # collapse diagnostics on pooled dialogue vectors
-    vecs = torch.cat(all_vecs, dim=0)               # (N, 4*d_model)
-    vec_std      = vecs.std(dim=0).mean().item()     # near 0 = collapsed
-    vec_norm_cv  = (vecs.norm(dim=-1).std() /
-                    vecs.norm(dim=-1).mean()).item()  # coeff of variation of norms
-
-    # pairwise cosine similarity — mean off-diagonal → 1.0 = fully collapsed
-    normed   = torch.nn.functional.normalize(vecs, dim=-1)
-    sim_mat  = normed @ normed.T
-    n        = sim_mat.shape[0]
-    off_diag = sim_mat[~torch.eye(n, dtype=torch.bool)].mean().item()
-
-    wandb_log({
-        f"{fp}/vec_std":          vec_std,
-        f"{fp}/vec_norm_cv":      vec_norm_cv,
-        f"{fp}/mean_cosine_sim":  off_diag,   # target: low (< 0.5); alarm: > 0.9
-    }, step=global_step, run=sweep_run)
-    del all_vecs, vecs
-
-
-    bs   = compute_bertscore(all_preds, all_refs, device=str(device))
-    met  = compute_meteor(all_preds, all_refs)
-    chrf = compute_chrf(all_preds, all_refs)
-    rou  = compute_rouge(all_preds, all_refs)
-
-    wandb_log({
-        f"{fp}/bertscore_f1": bs["bertscore_f1_mean"],
-        f"{fp}/meteor":       met["meteor_mean"],
-        f"{fp}/chrf":         chrf["chrf_mean"],
-        f"{fp}/rougeL":       rou["rougeL_mean"],
-    }, step=global_step, run=sweep_run)
-
-
-    for i, (pred, ref, txt) in enumerate(zip(all_preds[:3], all_refs[:3], all_texts[:3])):
-        log.info(f"  [Fold {fold_idx} Sample {i+1}]")
-        log.info(f"    Dialogue : {txt}")
-        log.info(f"    Predicted: {pred}")
-        log.info(f"    Reference: {ref}")
 
     gc.collect()
     torch.cuda.empty_cache()  # reclaim BERTScore model memory before next fold loads
@@ -276,10 +207,6 @@ def _train_fold(
     return {
         "val_loss":     best["val_loss"],
         "best_epoch":   best["epoch"],
-        "bertscore_f1": bs["bertscore_f1_mean"],
-        "meteor":       met["meteor_mean"],
-        "chrf":         chrf["chrf_mean"],
-        "rougeL":       rou["rougeL_mean"],
     }, global_step
 
 
@@ -308,7 +235,8 @@ def _eval_test_by_source(
         test_ds     = ConvoStyleDataset(**ds_kwargs, allowed_conv_ids=src_test_ids)
         test_loader = DataLoader(test_ds, batch_size=cfg["batch_size"], shuffle=False, **loader_kw)
 
-        all_preds, all_refs, all_texts = [], [], []
+        all_preds, all_refs, all_texts, all_vecs = [], [], [], []
+
         with torch.no_grad():
             for batch in test_loader:
                 with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
@@ -321,33 +249,63 @@ def _eval_test_by_source(
                     if cfg["num_turns"] == 0:
                         audio     = torch.zeros_like(audio)
                         text_only = torch.ones_like(text_only)
-                    ctx   = model.scfa(audio, lengths, texts, speaker_ids, text_only)
-                    vec   = model.pooler(ctx)
+                    ctx = model.scfa(audio, lengths, texts, speaker_ids, text_only)
+                    vec = model.pooler(ctx)
                     del ctx
+                    all_vecs.append(vec.float().detach().cpu())  # collect before delete
                     preds = model.style_generator.generate(vec)
                     del vec
+                
                 all_preds.extend(preds)
                 all_refs.extend([chain[-1] for chain in targets])
                 all_texts.extend(texts)
 
+        # free GPU memory
+        del test_loader
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        # collapse diagnostics on pooled dialogue vectors
+        vecs = torch.cat(all_vecs, dim=0)               # (N, 4*d_model)
+        vec_std      = vecs.std(dim=0).mean().item()     # near 0 = collapsed
+        vec_norm_cv  = (vecs.norm(dim=-1).std() /
+                        vecs.norm(dim=-1).mean()).item()  # coeff of variation of norms
+
+        # pairwise cosine similarity — mean off-diagonal → 1.0 = fully collapsed
+        normed   = torch.nn.functional.normalize(vecs, dim=-1)
+        sim_mat  = normed @ normed.T
+        n        = sim_mat.shape[0]
+        off_diag = sim_mat[~torch.eye(n, dtype=torch.bool)].mean().item()
+
+        wandb_log({
+            f"test/{src}/vec_std":          vec_std,
+            f"test/{src}/vec_norm_cv":      vec_norm_cv,
+            f"test/{src}/mean_cosine_sim":  off_diag,   # target: low (< 0.5); alarm: > 0.9
+        }, step=global_step, run=sweep_run)
+        del all_vecs, vecs
+        
         bs   = compute_bertscore(all_preds, all_refs, device=str(device))
         met  = compute_meteor(all_preds, all_refs)
         chrf = compute_chrf(all_preds, all_refs)
         rou  = compute_rouge(all_preds, all_refs)
+        tf1  = compute_tag_f1(all_preds, all_refs, src)
 
         wandb_log({
-            f"test/{src}/bertscore_f1": bs["bertscore_f1_mean"],
-            f"test/{src}/meteor":       met["meteor_mean"],
-            f"test/{src}/chrf":         chrf["chrf_mean"],
-            f"test/{src}/rougeL":       rou["rougeL_mean"],
+            f"test/{src}/bertscore_f1":   bs["bertscore_f1_mean"],
+            f"test/{src}/meteor":         met["meteor_mean"],
+            f"test/{src}/chrf":           chrf["chrf_mean"],
+            f"test/{src}/rougeL":         rou["rougeL_mean"],
+            **{f"test/{src}/{k[:-5]}": v for k, v in tf1.items() if k.endswith("_mean")},
         }, step=global_step, run=sweep_run)
 
         source_metrics[src] = {
-            "bertscore_f1": bs["bertscore_f1_mean"],
-            "meteor":       met["meteor_mean"],
-            "chrf":         chrf["chrf_mean"],
-            "rougeL":       rou["rougeL_mean"],
+            "bertscore_f1":   bs["bertscore_f1_mean"],
+            "meteor":         met["meteor_mean"],
+            "chrf":           chrf["chrf_mean"],
+            "rougeL":         rou["rougeL_mean"],
+            "tag_f1_overall": tf1["tag_f1_overall_mean"],
         }
+
 
         for i, (pred, ref, txt) in enumerate(zip(all_preds[:3], all_refs[:3], all_texts[:3])):
             log.info(f"  [Test/{src} Sample {i+1}]")
@@ -359,10 +317,6 @@ def _eval_test_by_source(
     torch.cuda.empty_cache()
 
     return source_metrics
-
-
-
-
 
 
 def _train_final_and_eval_test(
@@ -452,15 +406,11 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int):
             fold_metrics.append(metrics)
             log.info(
                 f"Fold {fold_idx + 1}  val_loss={metrics['val_loss']:.4f}  "
-                f"bertscore_f1={metrics['bertscore_f1']:.4f}  meteor={metrics['meteor']:.4f}  chrf={metrics['chrf']:.4f}"
             )
 
         # aggregate across folds (the sweep optimises this)
         val_losses    = [m["val_loss"]     for m in fold_metrics]
-        bert_f1s      = [m["bertscore_f1"] for m in fold_metrics]
-        meteor_scores = [m["meteor"]       for m in fold_metrics]
-        chrf_scores   = [m["chrf"]         for m in fold_metrics]
-        rougeL_scores = [m["rougeL"]       for m in fold_metrics]
+        best_epochs    = [m["best_epoch"]     for m in fold_metrics]
 
         
         # from training, average best epoch to stop at for test
@@ -468,17 +418,12 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int):
         log.info(f"Mean best epoch across folds: {mean_best_epoch}")
 
         summary = {
-            "cv/mean_val_loss":     float(np.mean(val_losses)),
-            "cv/std_val_loss":      float(np.std(val_losses)),
-            "cv/mean_bertscore_f1": float(np.mean(bert_f1s)),
-            "cv/std_bertscore_f1":  float(np.std(bert_f1s)),
-            "cv/mean_meteor":       float(np.mean(meteor_scores)),
-            "cv/std_meteor":        float(np.std(meteor_scores)),
-            "cv/mean_chrf":         float(np.mean(chrf_scores)),
-            "cv/std_chrf":          float(np.std(chrf_scores)),
-            "cv/mean_rougeL":       float(np.mean(rougeL_scores)),
-            "cv/std_rougeL":        float(np.std(rougeL_scores)),
+            "cv/mean_val_loss":      float(np.mean(val_losses)),
+            "cv/std_val_loss":       float(np.std(val_losses)),
+            "cv/mean_best_epoch":    float(np.mean(best_epochs)),
+            "cv/std_best_epoch":     float(np.std(best_epochs)),
         }
+
 
         # held-out test evaluation (train on all trainval, eval on test) 
         log.info("=== Final model: training on all train/val folds for test eval ===")
@@ -489,13 +434,15 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int):
         for src, src_m in test_metrics.items():
             log.info(
                 f"Test/{src}  bertscore_f1={src_m['bertscore_f1']:.4f}  "
-                f"meteor={src_m['meteor']:.4f}  chrf={src_m['chrf']:.4f}"
+                f"meteor={src_m['meteor']:.4f}  chrf={src_m['chrf']:.4f}  "
+                f"tag_f1={src_m['tag_f1_overall']:.4f}"
             )
             summary.update({
-                f"test/{src}/bertscore_f1": src_m["bertscore_f1"],
-                f"test/{src}/meteor":       src_m["meteor"],
-                f"test/{src}/chrf":         src_m["chrf"],
-                f"test/{src}/rougeL":       src_m["rougeL"],
+                f"test/{src}/bertscore_f1":   src_m["bertscore_f1"],
+                f"test/{src}/meteor":         src_m["meteor"],
+                f"test/{src}/chrf":           src_m["chrf"],
+                f"test/{src}/rougeL":         src_m["rougeL"],
+                f"test/{src}/tag_f1_overall": src_m["tag_f1_overall"],
             })
 
         run.summary.update(summary)
@@ -504,85 +451,14 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int):
         log.info(
             f"CV summary  mean_val_loss={summary['cv/mean_val_loss']:.4f} "
             f"(±{summary['cv/std_val_loss']:.4f})  "
-            f"mean_bertscore_f1={summary['cv/mean_bertscore_f1']:.4f}"
+            f"mean_best_epoch={summary['cv/mean_best_epoch']:.1f}"
         )
+
         run.finish()
 
 
     return sweep_fn
 
-
-def _make_test_sweep_fn(base_cfg: dict, num_trials: int, trial_seeds: list):
-    """Return the callable W&B invokes for each grid-search combo in test-experiment mode.
-    Runs num_trials repetitions of _train_final_and_eval_test with independent split seeds."""
-
-    def sweep_fn():
-        gc.collect()
-        torch.cuda.empty_cache()
-        run = wandb.init(settings=wandb.Settings(console="off"))
-        cfg = deepcopy(base_cfg)
-
-        for key, val in run.config.items():
-            
-            cfg[key] = val
-        if "num_unfrozen_embedder_layers" in run.config:
-            n = run.config["num_unfrozen_embedder_layers"]
-            cfg["num_unfrozen_bert"]  = n
-            cfg["num_unfrozen_wavlm"] = n
-
-        log.info(f"Run config: {json.dumps(cfg, indent=2, default=str)}")
-
-
-        run.config.update({"num_trials": num_trials}, allow_val_change=True)
-
-        device      = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        all_conv_ids = _get_conv_ids(cfg["meta_path"])
-
-
-        global_step   = 0
-        trial_results = []
-        for trial_idx, trial_seed in enumerate(trial_seeds):
-            log.info(f"=== Trial {trial_idx + 1}/{num_trials} (seed={trial_seed}) ===")
-            trial_cfg         = deepcopy(cfg)
-            trial_cfg["seed"] = int(trial_seed)
-
-            trainval_ids, test_ids = _carve_data_splits(all_conv_ids)
-
-            metrics, global_step = _train_final_and_eval_test(trial_cfg, trainval_ids, test_ids, run, device, global_step)
-
-            trial_results.append(metrics)
-            for src, src_m in metrics.items():
-                log.info(
-                    f"Trial {trial_idx + 1}/{src}: "
-                    f"bertscore_f1={src_m['bertscore_f1']:.4f}  "
-                    f"meteor={src_m['meteor']:.4f}  chrf={src_m['chrf']:.4f}"
-                )
-
-        sources = list(trial_results[0].keys())
-        summary = {}
-        for src in sources:
-            for metric in ["bertscore_f1", "meteor", "chrf", "rougeL"]:
-                vals = [m[src][metric] for m in trial_results]
-                summary[f"trials/{src}/mean_{metric}"] = float(np.mean(vals))
-                summary[f"trials/{src}/std_{metric}"]  = float(np.std(vals))
-
-        run.summary.update(summary)
-        wandb_log(summary, step=global_step, run=run)
-
-        for src in sources:
-            log.info(
-                f"Summary/{src}: bertscore_f1={summary[f'trials/{src}/mean_bertscore_f1']:.4f} "
-                f"(±{summary[f'trials/{src}/std_bertscore_f1']:.4f})  "
-                f"meteor={summary[f'trials/{src}/mean_meteor']:.4f} "
-                f"(±{summary[f'trials/{src}/std_meteor']:.4f})  "
-                f"chrf={summary[f'trials/{src}/mean_chrf']:.4f} "
-                f"(±{summary[f'trials/{src}/std_chrf']:.4f})"
-            )
-        run.finish()
-
-
-    return sweep_fn
 
 
 
@@ -596,13 +472,6 @@ def main():
                         help="Base config JSON with fixed hyperparameters (e.g. default_sweep_config.json).")
     parser.add_argument("--sweep_values", required=True,
                         help="W&B sweep search-space JSON (e.g. default_sweep_values.json).")
-    parser.add_argument("--experiment_type", choices=["hyperparameter", "test"],
-                        default="hyperparameter",
-                        help="'hyperparameter' runs a Bayesian/random W&B sweep; "
-                             "'test' runs a grid sweep where each combo is repeated num_trials times "
-                             "with independent random train/test splits.")
-    parser.add_argument("--num_trials",  type=int, default=5,
-                        help="Number of independent split-seed trials per combo (test mode only).")
     parser.add_argument("--n_folds",     type=int, default=5,
                         help="Number of CV folds (hyperparameter mode only, default: 5).")
     parser.add_argument("--sweep_id",    default=None,
@@ -620,13 +489,7 @@ def main():
         sweep_config = json.load(f)
 
     
-    if args.experiment_type == "test":
-        master_rng  = np.random.default_rng(base_cfg["seed"])
-        trial_seeds = master_rng.integers(0, 2**31, size=args.num_trials).tolist()
-        sweep_fn    = _make_test_sweep_fn(base_cfg, args.num_trials, trial_seeds)
-    else:
-        
-        sweep_fn = _make_sweep_fn(base_cfg, args.n_folds)
+    sweep_fn = _make_sweep_fn(base_cfg, args.n_folds)
 
     project = base_cfg["wandb_project"]
     entity  = base_cfg.get("wandb_entity")
@@ -640,8 +503,6 @@ def main():
 
     wandb.agent(sweep_id, function=sweep_fn, count=args.count,
                 project=project, entity=entity)
-
-
 
 
 
