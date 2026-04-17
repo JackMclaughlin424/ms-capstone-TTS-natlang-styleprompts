@@ -62,7 +62,7 @@ class StylePromptHead(nn.Module):
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=llm_dim,
             nhead=nhead,
-            dim_feedforward=llm_dim * 2,
+            # dim_feedforward=llm_dim * 2,  # use default 2048, matching papers
             dropout=dropout,
             batch_first=True,
         )
