@@ -5,21 +5,6 @@
         "goal": "minimize"
     },
     "parameters": {
-        "learning_rate": {
-            "distribution": "log_uniform_values",
-            "min": 1e-5,
-            "max": 1e-3
-        },
-        "weight_decay": {
-            "distribution": "log_uniform_values",
-            "min": 1e-4,
-            "max": 1e-2
-        },
-        "dropout": {
-            "distribution": "uniform",
-            "min": 0.0,
-            "max": 0.4
-        },
         "num_mapping_layers": {
             "values": [
                 2,
