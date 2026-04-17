@@ -276,7 +276,7 @@ class ConvoStyleDataset(Dataset):
 
         rng   = np.random.default_rng(_TEST_SEED)
         fixed: dict = {}
-        for src in sorted(chains_by_source):          # sorted → reproducible rng order
+        for src in sorted(chains_by_source):          # sorted - reproducible rng order
             chains = chains_by_source[src]
             idxs   = np.arange(len(chains))
             rng.shuffle(idxs)
