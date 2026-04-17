@@ -200,9 +200,11 @@ def _train_fold(
         
     )
 
-
+    # reclaim memory before next fold loads
+    del train_loader, val_loader, optimizer, scheduler, model
     gc.collect()
-    torch.cuda.empty_cache()  # reclaim BERTScore model memory before next fold loads
+    torch.cuda.empty_cache()
+  
     
     return {
         "val_loss":     best["val_loss"],
@@ -281,7 +283,8 @@ def _eval_test_by_source(
         n        = sim_mat.shape[0]
         off_diag = sim_mat[~torch.eye(n, dtype=torch.bool)].mean().item()
 
-        del all_vecs, vecs
+        del all_vecs, vecs, normed, sim_mat
+
         
         bs   = compute_bertscore(all_preds, all_refs, device=str(device))
         met  = compute_meteor(all_preds, all_refs)
@@ -441,7 +444,7 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int):
 
         
         test_metrics, global_step = _train_final_and_eval_test(cfg, trainval_ids, test_ids, run, device, global_step)
-
+        
         for src, src_m in test_metrics.items():
             log.info(
                 f"Test/{src}  bertscore_f1={src_m['bertscore_f1']:.4f}  "
@@ -450,10 +453,8 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int):
             )
             
             test_summary = {f"test/{src}/{k}": v for k, v in src_m.items()}
-
-
-        run.summary.update(test_summary)
-        wandb_log(test_summary, step=global_step, run=run)
+            run.summary.update(test_summary)      # move inside loop
+            wandb_log(test_summary, step=global_step, run=run)
 
 
         run.finish()
