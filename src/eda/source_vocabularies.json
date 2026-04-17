@@ -1,0 +1,64 @@
+{
+  "expresso": {
+    "american": {
+      "category": "accent"
+    },
+    "fast speed": {
+      "category": "speaking_rate"
+    },
+    "female": {
+      "category": "gender"
+    },
+    "high-pitched": {
+      "category": "pitch"
+    },
+    "male": {
+      "category": "gender"
+    },
+    "measured speed": {
+      "category": "speaking_rate"
+    },
+    "slow speed": {
+      "category": "speaking_rate"
+    }
+  },
+  "styletalk": {
+    "cheerful": {
+      "category": "emotion"
+    },
+    "excited": {
+      "category": "emotion"
+    },
+    "fast": {
+      "category": "speed"
+    },
+    "friendly": {
+      "category": "emotion"
+    },
+    "hopeful": {
+      "category": "emotion"
+    },
+    "loud": {
+      "category": "volume"
+    },
+    "neutral": {
+      "category": "emotion"
+    },
+    "normal": {
+      "category": "volume",
+      "category2": "speed"
+    },
+    "quiet": {
+      "category": "volume"
+    },
+    "sad": {
+      "category": "emotion"
+    },
+    "slow": {
+      "category": "speed"
+    },
+    "unfriendly": {
+      "category": "emotion"
+    }
+  }
+}
