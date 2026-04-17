@@ -542,3 +542,130 @@ def compute_rouge(
         "rougeL_mean": float(scores.mean()) if len(scores) else 0.0,
         "rougeL_std":  float(scores.std())  if len(scores) else 0.0,
     }
+
+
+
+# CUSTOM TAG-LEVEL F1 metric
+
+VOCAB_REF: Dict[str, Any] = {
+  "expresso": {
+    "accent": [
+      "american"
+    ],
+    "gender": [
+      "female",
+      "male"
+    ],
+    "intrinsic_tags": [
+      "american",
+      "authoritative",
+      "booming",
+      "crisp",
+      "enunciated",
+      "flowing",
+      "loud",
+      "nasal",
+      "shrill",
+      "silky",
+      "singsong"
+    ],
+    "noise": [
+      "clean environment",
+      "noisy environment",
+      "environment balanced"
+    ],
+    "pitch": [
+      "high-pitched"
+    ],
+    "speaking_rate": [
+      "fast speed",
+      "measured speed",
+      "slow speed"
+    ]
+  },
+  "styletalk": {
+    "emotion": [
+      "cheerful",
+      "excited",
+      "friendly",
+      "hopeful",
+      "neutral",
+      "sad",
+      "unfriendly"
+    ],
+    "speaking_rate": [
+      "fast",
+      "normal",
+      "slow"
+    ],
+    "volume": [
+      "loud",
+      "normal",
+      "quiet"
+    ]
+  }
+}
+
+_PATTERN_CACHE: Dict[str, Any] = {}
+
+def _load_tag_categories(source: str) -> Dict[str, Any]:
+    """Returns {category: compiled_regex} for the given source, compiled once."""
+    if source not in _PATTERN_CACHE:
+        import re
+        _PATTERN_CACHE[source] = {
+            cat: re.compile(
+                r'\b(' + '|'.join(re.escape(t) for t in sorted(tags, key=len, reverse=True)) + r')\b',
+                re.IGNORECASE,
+            )
+            for cat, tags in VOCAB_REF.get(source, {}).items()
+        }
+    return _PATTERN_CACHE[source]
+
+
+
+def _tags_present(pattern, text: str) -> set:
+    return set(m.lower() for m in pattern.findall(text))
+
+def _f1_sets(pred: set, ref: set) -> float:
+    if not pred and not ref:
+        return 1.0
+    if not pred or not ref:
+        return 0.0
+    tp = len(pred & ref)
+    p = tp / len(pred)
+    r = tp / len(ref)
+    return 2 * p * r / (p + r) if (p + r) else 0.0
+
+
+def compute_tag_f1(
+    preds: List[str],
+    refs: List[str],
+    test_dataset_source: str,
+) -> Dict[str, float]:
+    """Per-category tag F1 using word-boundary substring matching against the vocab."""
+    categories = _load_tag_categories(test_dataset_source)
+
+    cat_scores: Dict[str, List[float]] = {cat: [] for cat in categories}
+    overall_scores: List[float] = []
+
+    for pred, ref in zip(preds, refs):
+        all_pred, all_ref = set(), set()
+        for cat, tags in categories.items():
+            pred_tags = _tags_present(tags, pred)
+            ref_tags  = _tags_present(tags, ref)
+            cat_scores[cat].append(_f1_sets(pred_tags, ref_tags))
+            all_pred |= pred_tags
+            all_ref  |= ref_tags
+        overall_scores.append(_f1_sets(all_pred, all_ref))
+
+    metrics: Dict[str, float] = {}
+    for cat, scores in cat_scores.items():
+        arr = np.array(scores)
+        metrics[f"tag_f1_{cat}_mean"] = float(arr.mean()) if len(arr) else 0.0
+        metrics[f"tag_f1_{cat}_std"]  = float(arr.std())  if len(arr) else 0.0
+
+    arr = np.array(overall_scores)
+    metrics["tag_f1_overall_mean"] = float(arr.mean()) if len(arr) else 0.0
+    metrics["tag_f1_overall_std"]  = float(arr.std())  if len(arr) else 0.0
+
+    return metrics

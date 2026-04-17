@@ -379,19 +379,14 @@ def build_vocabulary(merged_df):
     }
 
     def _build_source_vocab(columns):
-        vocab = {}
-        for cat, vals in columns.items():
-            for v in vals:
-                if v in vocab:
-                    vocab[v]["category"].append(cat)
-                else:
-                    vocab[v] = {"category": [cat]}
-        return vocab
+        # category → [tags]; a tag appearing in multiple categories is listed in each
+        return {cat: vals for cat, vals in columns.items()}
 
     vocab = {
         "expresso":  _build_source_vocab(expresso_columns),
         "styletalk": _build_source_vocab(styletalk_columns),
     }
+
 
 
     out_path = "../eda/source_vocabularies.json"

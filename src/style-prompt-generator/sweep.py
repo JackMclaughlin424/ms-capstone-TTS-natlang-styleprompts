@@ -59,28 +59,48 @@ logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 
 
 TEST_SPLIT_SEED = 42
-
+TEST_SPLIT_RATIO = .1
 
 # Data helpers 
 
-def _get_conv_ids(meta_path: str) -> np.ndarray:
-    meta = pd.read_parquet(meta_path)
-    return np.array(meta["conv_id"].unique())
+def _get_conv_ids(meta_path: str) -> dict:
+    meta = pd.read_parquet(meta_path, columns=["conv_id", "source"])
+    return {
+        src: np.array(grp["conv_id"].unique())
+        for src, grp in meta.groupby("source")
+    }
 
 
 
-def _carve_data_splits(all_conv_ids: np.ndarray):
-    rng_split    = np.random.default_rng(TEST_SPLIT_SEED)
-    shuffled_all = all_conv_ids.copy()
-    rng_split.shuffle(shuffled_all)
-    n_test       = max(1, int(len(shuffled_all) * 0.10))
-    test_ids     = set(shuffled_all[:n_test])
-    trainval_ids = shuffled_all[n_test:]
-    log.info(
-        f"{len(all_conv_ids)} unique conversations → "
-        f"{len(trainval_ids)} train/val  |  {len(test_ids)} test (held-out)"
+
+def _carve_data_splits(conv_ids_by_source: dict):
+    rng   = np.random.default_rng(TEST_SPLIT_SEED)
+    total = sum(len(ids) for ids in conv_ids_by_source.values())
+    n_test       = max(2, int(total * TEST_SPLIT_RATIO))
+    n_per_source = n_test // 2
+
+    test_ids_by_source = {}
+    trainval_parts     = []
+    for src, ids in conv_ids_by_source.items():
+        shuffled = ids.copy()
+        rng.shuffle(shuffled)
+        n = min(n_per_source, len(shuffled))
+        test_ids_by_source[src] = set(shuffled[:n])
+        trainval_parts.append(shuffled[n:])
+
+    trainval_arr   = np.concatenate(trainval_parts)
+    source_summary = "  |  ".join(
+        f"{src}: {len(ids)}" for src, ids in test_ids_by_source.items()
     )
-    return trainval_ids, test_ids
+    log.info(
+        f"{total} unique conversations → "
+        f"{len(trainval_arr)} train/val  |  "
+        f"{sum(len(ids) for ids in test_ids_by_source.values())} test (held-out) "
+        f"[{source_summary}]"
+    )
+    return trainval_arr, test_ids_by_source
+
+
 
 
 
@@ -263,101 +283,125 @@ def _train_fold(
     }, global_step
 
 
+def _eval_test_by_source(
+    model,
+    cfg: dict,
+    test_ids_by_source: dict,
+    device: torch.device,
+    sweep_run,
+    global_step: int,
+) -> dict:
+    """Evaluate model on each source's test set; returns per-source metrics only."""
+    ds_kwargs = dict(
+        h5_path=cfg["h5_path"],
+        meta_path=cfg["meta_path"],
+        meta_columns=["transcription", "text_description"],
+        sample_rate=cfg["sample_rate"],
+        num_turns=cfg["num_turns"],
+        max_len_sec=cfg["max_len_sec"],
+    )
+    loader_kw = dict(collate_fn=collate_pad, num_workers=cfg["num_workers"], pin_memory=True)
+
+    source_metrics = {}
+
+    for src, src_test_ids in test_ids_by_source.items():
+        test_ds     = ConvoStyleDataset(**ds_kwargs, allowed_conv_ids=src_test_ids)
+        test_loader = DataLoader(test_ds, batch_size=cfg["batch_size"], shuffle=False, **loader_kw)
+
+        all_preds, all_refs, all_texts = [], [], []
+        with torch.no_grad():
+            for batch in test_loader:
+                with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
+                    audio       = batch["audio"].to(device)
+                    lengths     = batch["lengths"].to(device)
+                    text_only   = batch["text_only"].to(device)
+                    texts       = batch["transcription"]
+                    speaker_ids = batch["speaker_id"]
+                    targets     = batch["text_description"]
+                    if cfg["num_turns"] == 0:
+                        audio     = torch.zeros_like(audio)
+                        text_only = torch.ones_like(text_only)
+                    ctx   = model.scfa(audio, lengths, texts, speaker_ids, text_only)
+                    vec   = model.pooler(ctx)
+                    del ctx
+                    preds = model.style_generator.generate(vec)
+                    del vec
+                all_preds.extend(preds)
+                all_refs.extend([chain[-1] for chain in targets])
+                all_texts.extend(texts)
+
+        bs   = compute_bertscore(all_preds, all_refs, device=str(device))
+        met  = compute_meteor(all_preds, all_refs)
+        chrf = compute_chrf(all_preds, all_refs)
+        rou  = compute_rouge(all_preds, all_refs)
+
+        wandb_log({
+            f"test/{src}/bertscore_f1": bs["bertscore_f1_mean"],
+            f"test/{src}/meteor":       met["meteor_mean"],
+            f"test/{src}/chrf":         chrf["chrf_mean"],
+            f"test/{src}/rougeL":       rou["rougeL_mean"],
+        }, step=global_step, run=sweep_run)
+
+        source_metrics[src] = {
+            "bertscore_f1": bs["bertscore_f1_mean"],
+            "meteor":       met["meteor_mean"],
+            "chrf":         chrf["chrf_mean"],
+            "rougeL":       rou["rougeL_mean"],
+        }
+
+        for i, (pred, ref, txt) in enumerate(zip(all_preds[:3], all_refs[:3], all_texts[:3])):
+            log.info(f"  [Test/{src} Sample {i+1}]")
+            log.info(f"    Dialogue : {txt}")
+            log.info(f"    Predicted: {pred}")
+            log.info(f"    Reference: {ref}")
+
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    return source_metrics
+
+
+
+
 
 
 def _train_final_and_eval_test(
     cfg: dict,
     trainval_ids: set,
-    test_ids: set,
+    test_ids_by_source: dict,
     sweep_run,
     device: torch.device,
     global_step: int = 0,
 ) -> dict:
-    """Train on all train/val data, evaluate generation metrics on held-out test split."""
+    """Train on all train/val data, then evaluate per source on the held-out test split."""
     set_seed(cfg["seed"])
-    train_loader, test_loader = _build_fold_loaders(cfg, trainval_ids, test_ids)
+    all_test_ids = set().union(*test_ids_by_source.values())
+    train_loader, _ = _build_fold_loaders(cfg, trainval_ids, all_test_ids)
     model = build_model(cfg, device, log)
 
     total_steps = len(train_loader) * cfg["num_epochs"]
     optimizer, scheduler = build_optimizer_and_scheduler(model, cfg, total_steps, log)
-   
 
     for epoch in range(cfg["num_epochs"]):
         _, global_step = run_epoch(
-            model, train_loader, optimizer, scheduler, 
-            device, cfg, epoch, global_step, wandb_run=None, log_handler=log
-            , is_train=True, use_tqdm=False
+            model, train_loader, optimizer, scheduler,
+            device, cfg, epoch, global_step, wandb_run=None, log_handler=log,
+            is_train=True, use_tqdm=False
         )
 
     model.eval()
-    test_loss, _ = run_epoch(
-        model, test_loader, optimizer, scheduler, 
-        device, cfg, 0, global_step, wandb_run=None, log_handler=log
-        , is_train=False, use_tqdm=False
+    metrics = _eval_test_by_source(
+        model, cfg, test_ids_by_source, device, sweep_run, global_step
     )
 
-    all_preds, all_refs, all_texts = [], [], []
 
-    with torch.no_grad():
-        for batch in test_loader:
-            with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
-                audio       = batch["audio"].to(device)
-                lengths     = batch["lengths"].to(device)
-                text_only   = batch["text_only"].to(device)
-                texts       = batch["transcription"]
-                speaker_ids = batch["speaker_id"]
-                targets     = batch["text_description"]
-                if cfg["num_turns"] == 0:
-                    audio     = torch.zeros_like(audio)
-                    text_only = torch.ones_like(text_only)
-                
-                ctx   = model.scfa(audio, lengths, texts, speaker_ids, text_only)
-                vec   = model.pooler(ctx)
-                del ctx
-                preds = model.style_generator.generate(vec)
-                del vec
-
-
-                all_preds.extend(preds)
-                all_refs.extend([chain[-1] for chain in targets])
-                all_texts.extend(texts)
-
-    # memory management
-    del train_loader, test_loader
+    del train_loader
     del model, optimizer, scheduler
     gc.collect()
     torch.cuda.empty_cache()
 
-    bs   = compute_bertscore(all_preds, all_refs, device=str(device))
-    met  = compute_meteor(all_preds, all_refs)
-    chrf = compute_chrf(all_preds, all_refs)
-    rou  = compute_rouge(all_preds, all_refs)
+    return metrics, global_step
 
-    wandb_log({
-        f"test/bertscore_f1": bs["bertscore_f1_mean"],
-        f"test/meteor":       met["meteor_mean"],
-        f"test/chrf":         chrf["chrf_mean"],
-        f"test/rougeL":       rou["rougeL_mean"],
-    }, step=global_step, run=sweep_run)
-
-
-
-    for i, (pred, ref, txt) in enumerate(zip(all_preds[:3], all_refs[:3], all_texts[:3])):
-        log.info(f"  [Test Sample {i+1}]")
-        log.info(f"    Dialogue : {txt}")
-        log.info(f"    Predicted: {pred}")
-        log.info(f"    Reference: {ref}")
-
-    gc.collect()
-    torch.cuda.empty_cache()  # reclaim BERTScore model memory before next fold loads
-    
-    return {
-        "test_loss":    test_loss,
-        "bertscore_f1": bs["bertscore_f1_mean"],
-        "meteor":       met["meteor_mean"],
-        "chrf":         chrf["chrf_mean"],
-        "rougeL":       rou["rougeL_mean"],
-    }, global_step
 
 
 
@@ -442,24 +486,21 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int):
         
         test_metrics, global_step = _train_final_and_eval_test(cfg, trainval_ids, test_ids, run, device, global_step)
 
-
-        log.info(
-            f"Test  loss={test_metrics['test_loss']:.4f}  "
-            f"bertscore_f1={test_metrics['bertscore_f1']:.4f}  "
-            f"meteor={test_metrics['meteor']:.4f}"
-            f"chrf={test_metrics["chrf"]:.4f}"
-        )
-        
-        summary.update({
-            "test/loss":         test_metrics["test_loss"],
-            "test/bertscore_f1": test_metrics["bertscore_f1"],
-            "test/meteor":       test_metrics["meteor"],
-            "test/chrf":         test_metrics["chrf"],
-            "test/rougeL":       test_metrics["rougeL"],
-        })
+        for src, src_m in test_metrics.items():
+            log.info(
+                f"Test/{src}  bertscore_f1={src_m['bertscore_f1']:.4f}  "
+                f"meteor={src_m['meteor']:.4f}  chrf={src_m['chrf']:.4f}"
+            )
+            summary.update({
+                f"test/{src}/bertscore_f1": src_m["bertscore_f1"],
+                f"test/{src}/meteor":       src_m["meteor"],
+                f"test/{src}/chrf":         src_m["chrf"],
+                f"test/{src}/rougeL":       src_m["rougeL"],
+            })
 
         run.summary.update(summary)
         wandb_log(summary, step=global_step, run=run)
+
         log.info(
             f"CV summary  mean_val_loss={summary['cv/mean_val_loss']:.4f} "
             f"(±{summary['cv/std_val_loss']:.4f})  "
@@ -509,44 +550,37 @@ def _make_test_sweep_fn(base_cfg: dict, num_trials: int, trial_seeds: list):
             trainval_ids, test_ids = _carve_data_splits(all_conv_ids)
 
             metrics, global_step = _train_final_and_eval_test(trial_cfg, trainval_ids, test_ids, run, device, global_step)
-            
+
             trial_results.append(metrics)
-            log.info(
-                f"Trial {trial_idx + 1}: test_loss={metrics['test_loss']:.4f}  "
-                f"bertscore_f1={metrics['bertscore_f1']:.4f}  meteor={metrics['meteor']:.4f}  chrf={metrics['chrf']:.4f}"
-            )
+            for src, src_m in metrics.items():
+                log.info(
+                    f"Trial {trial_idx + 1}/{src}: "
+                    f"bertscore_f1={src_m['bertscore_f1']:.4f}  "
+                    f"meteor={src_m['meteor']:.4f}  chrf={src_m['chrf']:.4f}"
+                )
 
-        bert_f1s      = [m["bertscore_f1"] for m in trial_results]
-        meteor_scores = [m["meteor"]        for m in trial_results]
-        test_losses   = [m["test_loss"]     for m in trial_results]
-        chrf_scores   = [m["chrf"]          for m in trial_results]
-        rougeL_scores = [m["rougeL"]        for m in trial_results]
+        sources = list(trial_results[0].keys())
+        summary = {}
+        for src in sources:
+            for metric in ["bertscore_f1", "meteor", "chrf", "rougeL"]:
+                vals = [m[src][metric] for m in trial_results]
+                summary[f"trials/{src}/mean_{metric}"] = float(np.mean(vals))
+                summary[f"trials/{src}/std_{metric}"]  = float(np.std(vals))
 
-        summary = {
-            "trials/mean_bertscore_f1": float(np.mean(bert_f1s)),
-            "trials/std_bertscore_f1":  float(np.std(bert_f1s)),
-            "trials/mean_meteor":       float(np.mean(meteor_scores)),
-            "trials/std_meteor":        float(np.std(meteor_scores)),
-            "trials/mean_test_loss":    float(np.mean(test_losses)),
-            "trials/std_test_loss":     float(np.std(test_losses)),
-            "trials/mean_chrf":         float(np.mean(chrf_scores)),
-            "trials/std_chrf":          float(np.std(chrf_scores)),
-            "trials/mean_rougeL":       float(np.mean(rougeL_scores)),
-            "trials/std_rougeL":        float(np.std(rougeL_scores)),
-        }
-        
         run.summary.update(summary)
         wandb_log(summary, step=global_step, run=run)
 
-        log.info(
-            f"Summary of trials: bertscore_f1={summary['trials/mean_bertscore_f1']:.4f} "
-            f"(±{summary['trials/std_bertscore_f1']:.4f})  "
-            f"meteor={summary['trials/mean_meteor']:.4f} "
-            f"(±{summary['trials/std_meteor']:.4f})"
-            f"chrf={summary["trials/mean_chrf"]:.4f}"
-            f"(±{summary['trials/std_chrf']:.4f})"
-        )
+        for src in sources:
+            log.info(
+                f"Summary/{src}: bertscore_f1={summary[f'trials/{src}/mean_bertscore_f1']:.4f} "
+                f"(±{summary[f'trials/{src}/std_bertscore_f1']:.4f})  "
+                f"meteor={summary[f'trials/{src}/mean_meteor']:.4f} "
+                f"(±{summary[f'trials/{src}/std_meteor']:.4f})  "
+                f"chrf={summary[f'trials/{src}/mean_chrf']:.4f} "
+                f"(±{summary[f'trials/{src}/std_chrf']:.4f})"
+            )
         run.finish()
+
 
     return sweep_fn
 
