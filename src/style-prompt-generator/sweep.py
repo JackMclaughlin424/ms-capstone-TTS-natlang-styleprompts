@@ -60,7 +60,7 @@ logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 
 
 TEST_SPLIT_SEED = 42
-TEST_SPLIT_RATIO = .1
+TEST_SPLIT_SIZE = 300
 
 # Data helpers 
 
@@ -77,7 +77,7 @@ def _get_conv_ids(meta_path: str) -> dict:
 def _carve_data_splits(conv_ids_by_source: dict):
     rng   = np.random.default_rng(TEST_SPLIT_SEED)
     total = sum(len(ids) for ids in conv_ids_by_source.values())
-    n_test       = max(2, int(total * TEST_SPLIT_RATIO))
+    n_test       = TEST_SPLIT_SIZE
     n_per_source = n_test // 2
 
     test_ids_by_source = {}
@@ -361,7 +361,8 @@ def _train_final_and_eval_test(
 
 # Sweep function 
 
-def _make_sweep_fn(base_cfg: dict, n_folds: int):
+def _make_sweep_fn(base_cfg: dict, n_folds: int, overrides: list | None = None):
+
 
     """Return the callable that W&B's agent invokes for each hyperparameter trial."""
 
@@ -373,6 +374,9 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int):
 
         for key, val in run.config.items():
             cfg[key] = val
+
+        apply_overrides(cfg, overrides)
+
 
         # expand shared sweep param into per-encoder keys
         if "num_unfrozen_embedder_layers" in run.config:
@@ -487,13 +491,12 @@ def main():
     args = parser.parse_args()
 
     base_cfg = load_config(args.config)
-    base_cfg = apply_overrides(base_cfg, args.override)
 
     with open(args.sweep_values) as f:
         sweep_config = json.load(f)
 
-    
-    sweep_fn = _make_sweep_fn(base_cfg, args.n_folds)
+    sweep_fn = _make_sweep_fn(base_cfg, args.n_folds, args.override)
+
 
     project = base_cfg["wandb_project"]
     entity  = base_cfg.get("wandb_entity")
