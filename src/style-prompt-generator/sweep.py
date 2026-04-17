@@ -33,7 +33,7 @@ from model.train_helpers import (
     load_config, apply_overrides, set_seed,
     build_model, build_optimizer_and_scheduler,
     wandb_log, compute_bertscore, compute_meteor,
-    compute_chrf, compute_rouge, compute_tag_f1,
+    compute_chrf, compute_rouge, compute_tag_f1, eval_test_by_source
 )
 
 from train import run_epoch
@@ -169,109 +169,6 @@ def _train_fold(
     }, global_step
 
 
-def _flatten(d: dict) -> dict:
-    """Strip _mean suffix → bare name; keep _std keys as-is."""
-    return {(k[:-5] if k.endswith("_mean") else k): v for k, v in d.items()}
-
-
-
-def _eval_test_by_source(
-    model,
-    cfg: dict,
-    test_chains_by_source: dict,   # dict[src, list[chain]] from make_fixed_test_split
-    device: torch.device,
-) -> dict:
-    """Evaluate model on each source's fixed test chains; returns per-source metrics."""
-    loader_kw = dict(collate_fn=collate_pad, num_workers=cfg["num_workers"], pin_memory=True)
-
-    source_metrics = {}
-
-    for src, src_chains in test_chains_by_source.items():
-        test_ds = ConvoStyleDataset.from_prebuilt_chains(
-            chains=src_chains,
-            h5_path=cfg["h5_path"],
-            meta_columns=["transcription", "text_description"],
-            sample_rate=cfg["sample_rate"],
-            max_len_sec=cfg["max_len_sec"],
-        )
-        test_loader = DataLoader(test_ds, batch_size=cfg["batch_size"], shuffle=False, **loader_kw)
-        all_preds, all_refs, all_texts, all_vecs = [], [], [], []
-
-
-        with torch.no_grad():
-            for batch in test_loader:
-                with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
-                    audio       = batch["audio"].to(device)
-                    lengths     = batch["lengths"].to(device)
-                    text_only   = batch["text_only"].to(device)
-                    texts       = batch["transcription"]
-                    speaker_ids = batch["speaker_id"]
-                    targets     = batch["text_description"]
-                    if cfg["num_turns"] == 0:
-                        audio     = torch.zeros_like(audio)
-                        text_only = torch.ones_like(text_only)
-                    ctx = model.scfa(audio, lengths, texts, speaker_ids, text_only)
-                    vec = model.pooler(ctx)
-                    del ctx
-                    all_vecs.append(vec.float().detach().cpu())  # collect before delete
-                    preds = model.style_generator.generate(vec)
-                    del vec
-                
-                all_preds.extend(preds)
-                all_refs.extend([chain[-1] for chain in targets])
-                all_texts.extend(texts)
-
-        # free GPU memory
-        del test_loader
-        gc.collect()
-        torch.cuda.empty_cache()
-
-        # collapse diagnostics on pooled dialogue vectors
-        vecs = torch.cat(all_vecs, dim=0)               # (N, 4*d_model)
-        vec_std      = vecs.std(dim=0).mean().item()     # near 0 = collapsed
-        vec_norm_cv  = (vecs.norm(dim=-1).std() /
-                        vecs.norm(dim=-1).mean()).item()  # coeff of variation of norms
-
-        # pairwise cosine similarity — mean off-diagonal → 1.0 = fully collapsed
-        normed   = torch.nn.functional.normalize(vecs, dim=-1)
-        sim_mat  = normed @ normed.T
-        n        = sim_mat.shape[0]
-        off_diag = sim_mat[~torch.eye(n, dtype=torch.bool)].mean().item()
-
-        del all_vecs, vecs, normed, sim_mat
-
-        
-        bs   = compute_bertscore(all_preds, all_refs, device=str(device))
-        met  = compute_meteor(all_preds, all_refs)
-        chrf = compute_chrf(all_preds, all_refs)
-        rou  = compute_rouge(all_preds, all_refs)
-        tf1  = compute_tag_f1(all_preds, all_refs, src)
-
-        # automate logging of lots of metrics
-        source_metrics[src] = {
-            **_flatten(bs),
-            **_flatten(met),
-            **_flatten(chrf),
-            **_flatten(rou),
-            **_flatten(tf1),
-            "vec_std":         vec_std,
-            "vec_norm_cv":     vec_norm_cv,
-            "mean_cosine_sim": off_diag,
-        }
-
-
-
-        for i, (pred, ref, txt) in enumerate(zip(all_preds[:3], all_refs[:3], all_texts[:3])):
-            log.info(f"  [Test/{src} Sample {i+1}]")
-            log.info(f"    Dialogue : {txt}")
-            log.info(f"    Predicted: {pred}")
-            log.info(f"    Reference: {ref}")
-
-    gc.collect()
-    torch.cuda.empty_cache()
-
-    return source_metrics
-
 
 def _train_final_and_eval_test(
     cfg: dict,
@@ -312,7 +209,7 @@ def _train_final_and_eval_test(
         )
 
     model.eval()
-    metrics = _eval_test_by_source(
+    metrics = eval_test_by_source(
         model, cfg, test_chains_by_source, device
     )
 

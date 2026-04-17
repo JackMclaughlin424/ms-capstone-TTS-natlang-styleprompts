@@ -20,9 +20,8 @@ import wandb
 
 from dataset.ConvoStyleDataset import ConvoStyleDataset
 from model.train_helpers import (
-    apply_overrides, build_model, load_config, set_seed, wandb_log,
+    apply_overrides, build_model, load_config, set_seed, wandb_log, eval_test_by_source
 )
-from sweep import _eval_test_by_source
 
 logging.basicConfig(
     level=logging.INFO,
