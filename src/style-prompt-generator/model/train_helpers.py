@@ -2,6 +2,8 @@ import nltk
 from nltk.translate.meteor_score import meteor_score as _meteor
 from bert_score import score as _bert_score
 from sacrebleu.metrics import CHRF as _CHRF
+from rouge_score import rouge_scorer as _rouge_scorer
+
 
 import argparse
 import json
@@ -523,4 +525,20 @@ def compute_chrf(
     return {
         "chrf_mean": float(scores.mean()) if len(scores) else 0.0,
         "chrf_std":  float(scores.std())  if len(scores) else 0.0,
+    }
+
+
+def compute_rouge(
+    preds: List[str],
+    refs: List[str],
+) -> Dict[str, float]:
+    """Compute ROUGE-L mean and std over a batch of predictions."""
+    scorer = _rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
+    scores = np.array([
+        scorer.score(ref, pred)["rougeL"].fmeasure
+        for pred, ref in zip(preds, refs)
+    ])
+    return {
+        "rougeL_mean": float(scores.mean()) if len(scores) else 0.0,
+        "rougeL_std":  float(scores.std())  if len(scores) else 0.0,
     }

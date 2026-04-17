@@ -32,7 +32,8 @@ import itertools
 from model.train_helpers import (
     load_config, apply_overrides, set_seed,
     build_model, build_optimizer_and_scheduler,
-    wandb_log, compute_bertscore, compute_meteor, compute_chrf,
+    wandb_log, compute_bertscore, compute_meteor,
+    compute_chrf, compute_rouge,
 )
 from train import run_epoch
 from dataset.ConvoStyleDataset import ConvoStyleDataset, collate_pad
@@ -57,46 +58,30 @@ logging.getLogger("transformers").setLevel(logging.WARNING)
 logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 
 
+TEST_SPLIT_SEED = 42
 
 
 # Data helpers 
 
-def _get_conv_ids(meta_path: str, data_source: str = "both") -> np.ndarray:
+def _get_conv_ids(meta_path: str) -> np.ndarray:
     meta = pd.read_parquet(meta_path)
-    if data_source != "both":
-        meta = meta[meta["source"] == data_source]
     return np.array(meta["conv_id"].unique())
 
 
-def _carve_data_splits(all_conv_ids: np.ndarray, base_cfg: dict, data_source: str = "both"):
-    if data_source != "both":
-        other_source  = "styletalk" if data_source == "expresso" else "expresso"
-        other_ids     = _get_conv_ids(base_cfg["meta_path"], other_source)
-        max_test      = base_cfg.get("max_test_convos")
-        if max_test is not None:
-            rng_test  = np.random.default_rng(base_cfg["seed"])
-            rng_test.shuffle(other_ids)
-            other_ids = other_ids[:max_test]
-        test_ids     = set(other_ids)
-        trainval_ids = all_conv_ids
-        log.info(
-            f"{len(trainval_ids)} {data_source} conversations for train/val  |  "
-            f"{len(test_ids)} {other_source} conversations for test (cross-dataset)"
-        )
-    else:
-        # carve out a 10% held-out test split before any fold construction
-        rng_split    = np.random.default_rng(base_cfg["seed"])
-        shuffled_all = all_conv_ids.copy()
-        rng_split.shuffle(shuffled_all)
-        n_test       = max(1, int(len(shuffled_all) * 0.10))
-        test_ids     = set(shuffled_all[:n_test])
-        trainval_ids = shuffled_all[n_test:]
-        log.info(
-            f"{len(all_conv_ids)} unique conversations → "
-            f"{len(trainval_ids)} train/val  |  {len(test_ids)} test (held-out)"
-        )
 
+def _carve_data_splits(all_conv_ids: np.ndarray):
+    rng_split    = np.random.default_rng(TEST_SPLIT_SEED)
+    shuffled_all = all_conv_ids.copy()
+    rng_split.shuffle(shuffled_all)
+    n_test       = max(1, int(len(shuffled_all) * 0.10))
+    test_ids     = set(shuffled_all[:n_test])
+    trainval_ids = shuffled_all[n_test:]
+    log.info(
+        f"{len(all_conv_ids)} unique conversations → "
+        f"{len(trainval_ids)} train/val  |  {len(test_ids)} test (held-out)"
+    )
     return trainval_ids, test_ids
+
 
 
 
@@ -246,15 +231,18 @@ def _train_fold(
     del all_vecs, vecs
 
 
-    bs  = compute_bertscore(all_preds, all_refs, device=str(device))
-    met = compute_meteor(all_preds, all_refs)
+    bs   = compute_bertscore(all_preds, all_refs, device=str(device))
+    met  = compute_meteor(all_preds, all_refs)
     chrf = compute_chrf(all_preds, all_refs)
+    rou  = compute_rouge(all_preds, all_refs)
 
     wandb_log({
         f"{fp}/bertscore_f1": bs["bertscore_f1_mean"],
         f"{fp}/meteor":       met["meteor_mean"],
         f"{fp}/chrf":         chrf["chrf_mean"],
+        f"{fp}/rougeL":       rou["rougeL_mean"],
     }, step=global_step, run=sweep_run)
+
 
     for i, (pred, ref, txt) in enumerate(zip(all_preds[:3], all_refs[:3], all_texts[:3])):
         log.info(f"  [Fold {fold_idx} Sample {i+1}]")
@@ -271,7 +259,9 @@ def _train_fold(
         "bertscore_f1": bs["bertscore_f1_mean"],
         "meteor":       met["meteor_mean"],
         "chrf":         chrf["chrf_mean"],
+        "rougeL":       rou["rougeL_mean"],
     }, global_step
+
 
 
 
@@ -338,15 +328,18 @@ def _train_final_and_eval_test(
     gc.collect()
     torch.cuda.empty_cache()
 
-    bs  = compute_bertscore(all_preds, all_refs, device=str(device))
-    met = compute_meteor(all_preds, all_refs)
+    bs   = compute_bertscore(all_preds, all_refs, device=str(device))
+    met  = compute_meteor(all_preds, all_refs)
     chrf = compute_chrf(all_preds, all_refs)
+    rou  = compute_rouge(all_preds, all_refs)
 
     wandb_log({
         f"test/bertscore_f1": bs["bertscore_f1_mean"],
         f"test/meteor":       met["meteor_mean"],
         f"test/chrf":         chrf["chrf_mean"],
+        f"test/rougeL":       rou["rougeL_mean"],
     }, step=global_step, run=sweep_run)
+
 
 
     for i, (pred, ref, txt) in enumerate(zip(all_preds[:3], all_refs[:3], all_texts[:3])):
@@ -359,11 +352,13 @@ def _train_final_and_eval_test(
     torch.cuda.empty_cache()  # reclaim BERTScore model memory before next fold loads
     
     return {
-        "test_loss":     test_loss,
-        "bertscore_f1":  bs["bertscore_f1_mean"],
-        "meteor":        met["meteor_mean"],
-        "chrf":          chrf["chrf_mean"],
+        "test_loss":    test_loss,
+        "bertscore_f1": bs["bertscore_f1_mean"],
+        "meteor":       met["meteor_mean"],
+        "chrf":         chrf["chrf_mean"],
+        "rougeL":       rou["rougeL_mean"],
     }, global_step
+
 
 
 
@@ -391,9 +386,10 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int):
         run.config.update({"n_folds": n_folds}, allow_val_change=True)
         log.info(f"Run config: {json.dumps(cfg, indent=2, default=str)}")
 
-        data_source      = cfg.get("data_source", "both")
-        raw_conv_ids     = _get_conv_ids(cfg["meta_path"], data_source)
-        trainval_arr, test_ids = _carve_data_splits(raw_conv_ids, cfg, data_source)
+
+        raw_conv_ids           = _get_conv_ids(cfg["meta_path"])
+        trainval_arr, test_ids = _carve_data_splits(raw_conv_ids)
+
 
         rng      = np.random.default_rng(cfg["seed"])
         shuffled = trainval_arr.copy()
@@ -420,7 +416,9 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int):
         bert_f1s      = [m["bertscore_f1"] for m in fold_metrics]
         meteor_scores = [m["meteor"]       for m in fold_metrics]
         chrf_scores   = [m["chrf"]         for m in fold_metrics]
+        rougeL_scores = [m["rougeL"]       for m in fold_metrics]
 
+        
         # from training, average best epoch to stop at for test
         mean_best_epoch = int(round(np.mean([m["best_epoch"] for m in fold_metrics])))
         log.info(f"Mean best epoch across folds: {mean_best_epoch}")
@@ -434,23 +432,30 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int):
             "cv/std_meteor":        float(np.std(meteor_scores)),
             "cv/mean_chrf":         float(np.mean(chrf_scores)),
             "cv/std_chrf":          float(np.std(chrf_scores)),
+            "cv/mean_rougeL":       float(np.mean(rougeL_scores)),
+            "cv/std_rougeL":        float(np.std(rougeL_scores)),
         }
 
         # held-out test evaluation (train on all trainval, eval on test) 
         log.info("=== Final model: training on all train/val folds for test eval ===")
         trainval_ids = set(np.concatenate(folds))
-        test_metrics = _train_final_and_eval_test(cfg, trainval_ids, test_ids, run, device)
+        
+        test_metrics, global_step = _train_final_and_eval_test(cfg, trainval_ids, test_ids, run, device, global_step)
+
+
         log.info(
             f"Test  loss={test_metrics['test_loss']:.4f}  "
             f"bertscore_f1={test_metrics['bertscore_f1']:.4f}  "
             f"meteor={test_metrics['meteor']:.4f}"
             f"chrf={test_metrics["chrf"]:.4f}"
         )
+        
         summary.update({
             "test/loss":         test_metrics["test_loss"],
             "test/bertscore_f1": test_metrics["bertscore_f1"],
             "test/meteor":       test_metrics["meteor"],
             "test/chrf":         test_metrics["chrf"],
+            "test/rougeL":       test_metrics["rougeL"],
         })
 
         run.summary.update(summary)
@@ -490,8 +495,9 @@ def _make_test_sweep_fn(base_cfg: dict, num_trials: int, trial_seeds: list):
         run.config.update({"num_trials": num_trials}, allow_val_change=True)
 
         device      = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        data_source  = cfg.get("data_source", "both")
-        all_conv_ids = _get_conv_ids(cfg["meta_path"], data_source)
+
+        all_conv_ids = _get_conv_ids(cfg["meta_path"])
+
 
         global_step   = 0
         trial_results = []
@@ -500,7 +506,8 @@ def _make_test_sweep_fn(base_cfg: dict, num_trials: int, trial_seeds: list):
             trial_cfg         = deepcopy(cfg)
             trial_cfg["seed"] = int(trial_seed)
 
-            trainval_ids, test_ids = _carve_data_splits(all_conv_ids, trial_cfg, data_source)
+            trainval_ids, test_ids = _carve_data_splits(all_conv_ids)
+
             metrics, global_step = _train_final_and_eval_test(trial_cfg, trainval_ids, test_ids, run, device, global_step)
             
             trial_results.append(metrics)
@@ -513,6 +520,7 @@ def _make_test_sweep_fn(base_cfg: dict, num_trials: int, trial_seeds: list):
         meteor_scores = [m["meteor"]        for m in trial_results]
         test_losses   = [m["test_loss"]     for m in trial_results]
         chrf_scores   = [m["chrf"]          for m in trial_results]
+        rougeL_scores = [m["rougeL"]        for m in trial_results]
 
         summary = {
             "trials/mean_bertscore_f1": float(np.mean(bert_f1s)),
@@ -523,7 +531,10 @@ def _make_test_sweep_fn(base_cfg: dict, num_trials: int, trial_seeds: list):
             "trials/std_test_loss":     float(np.std(test_losses)),
             "trials/mean_chrf":         float(np.mean(chrf_scores)),
             "trials/std_chrf":          float(np.std(chrf_scores)),
+            "trials/mean_rougeL":       float(np.mean(rougeL_scores)),
+            "trials/std_rougeL":        float(np.std(rougeL_scores)),
         }
+        
         run.summary.update(summary)
         wandb_log(summary, step=global_step, run=run)
 
