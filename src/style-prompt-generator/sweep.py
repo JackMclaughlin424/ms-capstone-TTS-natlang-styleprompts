@@ -208,6 +208,7 @@ def _train_final_and_eval_test(
             is_train=True, use_tqdm=False
         )
 
+    log.info("Evaluating generation...")
     model.eval()
     metrics = eval_test_by_source(
         model, cfg, test_chains_by_source, device
