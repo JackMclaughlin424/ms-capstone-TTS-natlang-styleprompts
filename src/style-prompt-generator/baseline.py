@@ -22,7 +22,8 @@ import wandb
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from dataset.ConvoStyleDataset import ConvoStyleDataset
-from model.train_helpers import compute_bertscore, compute_meteor, compute_chrf
+from model.train_helpers import compute_bertscore, compute_meteor, compute_chrf, compute_rouge, compute_tag_f1
+
 from tqdm import tqdm
 
 
@@ -271,17 +272,22 @@ def run_baseline(cfg: dict, run) -> dict:
         json.dump(records, f, indent=2)
     print(f"\nSaved {len(records)} inference records to {output_path}")
 
-    bs_metrics   = compute_bertscore(all_preds, all_refs, device=device)
-    met_metrics  = compute_meteor(all_preds, all_refs)
-    chrf_metrics = compute_chrf(all_preds, all_refs)
+    bs_metrics    = compute_bertscore(all_preds, all_refs, device=device)
+    met_metrics   = compute_meteor(all_preds, all_refs)
+    chrf_metrics  = compute_chrf(all_preds, all_refs)
+    rouge_metrics = compute_rouge(all_preds, all_refs)
+    tag_metrics   = compute_tag_f1(all_preds, all_refs)
 
     print(f"BERTScore F1 : {bs_metrics['bertscore_f1_mean']:.4f}")
     print(f"METEOR       : {met_metrics['meteor_mean']:.4f}")
     print(f"ChrF++       : {chrf_metrics['chrf_mean']:.4f}")
+    print(f"ROUGE        : {rouge_metrics['rouge_mean']:.4f}")
+    print(f"Tag F1       : {tag_metrics['tag_f1_overall']:.4f}")
 
-    results = {**bs_metrics, **met_metrics, **chrf_metrics}
+    results = {**bs_metrics, **met_metrics, **chrf_metrics, **rouge_metrics, **tag_metrics}
     if run:
         run.log(results)
+
 
     gc.collect()
     if device == "cuda":
