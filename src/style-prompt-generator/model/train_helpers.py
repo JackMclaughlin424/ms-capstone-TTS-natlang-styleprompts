@@ -798,3 +798,12 @@ def eval_test_by_source(
     torch.cuda.empty_cache()
 
     return source_metrics
+
+
+def assert_no_test_leakage(trainval_ids: set, test_conv_ids: set) -> None:
+    """Raise if any test conv_id leaked into the train/val pool."""
+    overlap = trainval_ids & test_conv_ids
+    assert not overlap, (
+        f"Data leakage: {len(overlap)} conv_id(s) appear in both train/val and test sets: "
+        f"{sorted(overlap)[:5]}{'...' if len(overlap) > 5 else ''}"
+    )

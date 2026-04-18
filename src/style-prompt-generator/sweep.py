@@ -33,7 +33,8 @@ from model.train_helpers import (
     load_config, apply_overrides, set_seed,
     build_model, build_optimizer_and_scheduler,
     wandb_log, compute_bertscore, compute_meteor,
-    compute_chrf, compute_rouge, compute_tag_f1, eval_test_by_source
+    compute_chrf, compute_rouge, compute_tag_f1, eval_test_by_source,
+    assert_no_test_leakage
 )
 
 from train import run_epoch
@@ -82,6 +83,8 @@ def _build_fold_loaders(cfg: dict, train_ids: set, val_ids: set):
     val_loader   = DataLoader(val_ds,   batch_size=cfg["batch_size"], shuffle=False, **loader_kw)
     log.info(f"  {len(train_ds)} train chains  |  {len(val_ds)} val chains")
     return train_loader, val_loader
+
+
 
 
 # Single-fold training 
@@ -264,10 +267,13 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int, overrides: list | None = None):
             num_turns=cfg["num_turns"],
         )
 
+
+
         meta         = pd.read_parquet(cfg["meta_path"], columns=["conv_id"])
         trainval_arr = np.array([c for c in meta["conv_id"].unique() if c not in test_conv_ids])
 
-
+        # double check no leakage
+        assert_no_test_leakage(set(trainval_arr), test_conv_ids)
 
         rng      = np.random.default_rng(cfg["seed"])
         shuffled = trainval_arr.copy()
