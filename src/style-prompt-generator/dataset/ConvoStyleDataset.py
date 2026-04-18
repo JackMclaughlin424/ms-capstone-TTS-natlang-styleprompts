@@ -250,15 +250,18 @@ class ConvoStyleDataset(Dataset):
         meta_columns: Optional[List[str]] = None,
         max_len_sec:  Optional[float]     = None,
         sample_rate:  int                 = 16_000,
+        num_turns:    int                 = _TEST_NUM_TURNS,
     ) -> tuple:
         """
         Deterministically carves out test chains using _TEST_* constants.
-        Chain selection is at the chain level (not conversation level), so the
-        same chains are held out regardless of the num_turns used during training.
+        The fixed pool is always built at _TEST_NUM_TURNS (5) so chain identity
+        is stable across sweep configs. The last `num_turns` turns of each chain
+        are sliced before returning, so callers always receive chains whose audio
+        turns are at the end (styletalk-safe for any num_turns <= _TEST_NUM_TURNS).
 
         Returns:
-            chains_by_source  – dict[str, list[chain]] of fixed test chains
-            test_conv_ids     – set of conv_ids to exclude from train/val
+            chains_by_source  - dict[str, list[chain]] sliced to num_turns
+            test_conv_ids     - set of conv_ids to exclude from train/val
         """
         full_ds = cls(
             h5_path=h5_path,
@@ -266,7 +269,7 @@ class ConvoStyleDataset(Dataset):
             meta_columns=meta_columns,
             max_len_sec=max_len_sec,
             sample_rate=sample_rate,
-            num_turns=_TEST_NUM_TURNS,
+            num_turns=_TEST_NUM_TURNS,  # always build the full 5-turn chains
         )
 
         chains_by_source: dict = {}
@@ -281,7 +284,8 @@ class ConvoStyleDataset(Dataset):
             idxs   = np.arange(len(chains))
             rng.shuffle(idxs)
             n = min(_TEST_N_CHAINS_PER_SOURCE, len(idxs))
-            fixed[src] = [chains[i] for i in idxs[:n]]
+            # slice to last num_turns so audio turns are always present (styletalk-safe)
+            fixed[src] = [chains[i][-num_turns:] for i in idxs[:n]]
 
         test_conv_ids = {
             chain[0]["conv_id"]

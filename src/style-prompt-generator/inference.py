@@ -64,7 +64,9 @@ def main():
         meta_columns=["transcription", "text_description", "source"],
         sample_rate=cfg["sample_rate"],
         max_len_sec=cfg["max_len_sec"],
+        num_turns=cfg["num_turns"],
     )
+
 
     source_metrics = eval_test_by_source(model, cfg, test_chains_by_source, device, log)
 

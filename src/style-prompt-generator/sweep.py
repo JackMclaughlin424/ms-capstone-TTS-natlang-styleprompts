@@ -261,7 +261,9 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int, overrides: list | None = None):
             meta_columns=["transcription", "text_description", "source"],
             sample_rate=cfg["sample_rate"],
             max_len_sec=cfg["max_len_sec"],
+            num_turns=cfg["num_turns"],
         )
+
         meta         = pd.read_parquet(cfg["meta_path"], columns=["conv_id"])
         trainval_arr = np.array([c for c in meta["conv_id"].unique() if c not in test_conv_ids])
 
