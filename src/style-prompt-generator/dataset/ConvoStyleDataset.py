@@ -13,7 +13,7 @@ _TEXT_ONLY_SOURCES = {"styletalk"}
 
 # styletalk always has exactly this many text-only turns at the front of a chain
 _STYLETALK_TEXT_ONLY_TURNS = 3
-_STYLETALK_FINAL_TURN_INDEX = 5
+_STYLETALK_FINAL_TURN_INDEX = 4
 
 
 # Define test set
