@@ -13,6 +13,7 @@ _TEXT_ONLY_SOURCES = {"styletalk"}
 
 # styletalk always has exactly this many text-only turns at the front of a chain
 _STYLETALK_TEXT_ONLY_TURNS = 3
+_STYLETALK_FINAL_TURN_INDEX = 5
 
 
 # Define test set
@@ -65,9 +66,16 @@ class ConvoStyleDataset(Dataset):
         self._path_to_row = meta.set_index("relative_audio_path")
 
         # anchor rows are the "last" turn in each chain we want to load, and they must have audio
-        anchors = meta[
-            (meta["turn_index"] >= (num_turns - 1)) & (meta["hdf5_idx"] >= 0) # audio only
-        ].reset_index(drop=True)
+        # styletalk always anchors at its final turn; other sources use the rolling window
+        styletalk_mask = meta["source"].str.lower() == "styletalk"
+        styletalk_anchors = meta[
+            styletalk_mask & (meta["turn_index"] == _STYLETALK_FINAL_TURN_INDEX) & (meta["hdf5_idx"] >= 0)
+        ]
+        other_anchors = meta[
+            ~styletalk_mask & (meta["turn_index"] >= (num_turns - 1)) & (meta["hdf5_idx"] >= 0)
+        ]
+        anchors = pd.concat([styletalk_anchors, other_anchors]).reset_index(drop=True)
+
         # resolve every anchor into a full chain, drop any with broken links
         if meta_columns is not None:
             # always keep the fields we need for chain walking + audio loading
@@ -123,19 +131,14 @@ class ConvoStyleDataset(Dataset):
 
 
     def _validate_styletalk_chain(self, chain: list) -> Optional[list]:
-        # styletalk: first N turns must be text-only, the rest must have audio
-        for turn_pos, row in enumerate(chain):
+        # use turn_index (not chain position) since we anchor at the final turn
+        for row in chain:
             hdf5_idx = int(row["hdf5_idx"])
-            is_text_only_slot = turn_pos < _STYLETALK_TEXT_ONLY_TURNS
-
-            if is_text_only_slot and hdf5_idx != -1:
-                # we expect text-only here; a real audio file is unexpected but not fatal
-                pass
-            elif not is_text_only_slot and hdf5_idx == -1:
-                # audio turns must actually have audio
+            is_text_only_slot = int(row["turn_index"]) < _STYLETALK_TEXT_ONLY_TURNS
+            if not is_text_only_slot and hdf5_idx == -1:
                 return None
-
         return chain
+
 
     def _validate_expresso_chain(self, chain: list) -> Optional[list]:
         # expresso: no text-only rows allowed anywhere in the chain

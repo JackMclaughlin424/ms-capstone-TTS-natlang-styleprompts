@@ -16,7 +16,7 @@
             "max": 1e-2
         },
         "warmup_ratio": {
-            "distribution": "uniform_values",
+            "distribution": "uniform",
             "min": 0.0,
             "max": 0.2
         },
