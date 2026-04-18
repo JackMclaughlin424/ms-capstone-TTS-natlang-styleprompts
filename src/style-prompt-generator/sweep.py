@@ -275,6 +275,10 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int, overrides: list | None = None):
         # double check no leakage
         assert_no_test_leakage(set(trainval_arr), test_conv_ids)
 
+        n_test = sum(len(v) for v in test_chains_by_source.values())
+        log.info(f"Split sizes  trainval_conv_ids={len(trainval_arr)}  test_chains={n_test}")
+
+
         rng      = np.random.default_rng(cfg["seed"])
         shuffled = trainval_arr.copy()
         rng.shuffle(shuffled)
