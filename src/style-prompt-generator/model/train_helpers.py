@@ -558,7 +558,7 @@ VOCAB_REF: Dict[str, Any] = {
       "male"
     ],
     "intrinsic_tags": [
-      "american",
+    #   "american",  excluded since already in another category
       "authoritative",
       "booming",
       "crisp",
@@ -570,6 +570,28 @@ VOCAB_REF: Dict[str, Any] = {
       "silky",
       "singsong"
     ],
+    "situational_tags": [
+        'angry',
+        'animated',
+        'awed',
+        'bored',
+        'calm',
+        'confused',
+        'desirous',
+        'disgusted',
+        'enunciated',
+        # 'fast',
+        'happy',
+        'laughing',
+        'loud',
+        'passive',
+        'saddened',
+        'sarcastic',
+        'scared',
+        'sleepy',
+        'sympathetic',
+        'whispered'
+        ],
     "noise": [
       "clean environment",
       "noisy environment",
@@ -586,23 +608,23 @@ VOCAB_REF: Dict[str, Any] = {
   },
   "styletalk": {
     "emotion": [
-      "cheerful",
-      "excited",
-      "friendly",
-      "hopeful",
-      "neutral",
-      "sad",
-      "unfriendly"
+      "cheerful tone",
+      "excited tone",
+      "friendly tone",
+      "hopeful tone",
+      "neutral tone",
+      "sad tone",
+      "unfriendly tone"
     ],
     "speaking_rate": [
-      "fast",
-      "normal",
-      "slow"
+      "fast speed",
+      "normal speed",
+      "slow speed"
     ],
     "volume": [
-      "loud",
-      "normal",
-      "quiet"
+      "loud volume",
+      "normal volume",
+      "quiet volume"
     ]
   }
 }
@@ -679,13 +701,12 @@ def _flatten(d: dict) -> dict:
 
 
 
-
-
 def eval_test_by_source(
     model,
     cfg: dict,
     test_chains_by_source: dict,   # dict[src, list[chain]] from make_fixed_test_split
     device: torch.device,
+    log
 ) -> dict:
     """Evaluate model on each source's fixed test chains; returns per-source metrics."""
     loader_kw = dict(collate_fn=collate_pad, num_workers=cfg["num_workers"], pin_memory=True)

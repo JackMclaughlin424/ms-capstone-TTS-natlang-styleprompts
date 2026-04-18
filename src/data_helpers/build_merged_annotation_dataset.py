@@ -370,7 +370,7 @@ def build_vocabulary(merged_df):
         "speaking_rate": sorted(expresso_df["speaking_rate"].dropna().unique().tolist()),
         "noise": sorted(expresso_df["noise"].dropna().unique().tolist()),
         "intrinsic_tags": sorted(expresso_df["intrinsic_tags"].explode().dropna().unique().tolist()),
-
+        "situational_tags": sorted(expresso_df["situational_tags"].explode().dropna().unique().tolist()),
     }
     styletalk_columns = {
         "emotion":       sorted(st_audio_df["emotion"].dropna().unique().tolist()),

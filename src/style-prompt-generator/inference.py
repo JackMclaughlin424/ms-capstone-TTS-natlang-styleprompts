@@ -66,7 +66,7 @@ def main():
         max_len_sec=cfg["max_len_sec"],
     )
 
-    source_metrics = _eval_test_by_source(model, cfg, test_chains_by_source, device)
+    source_metrics = eval_test_by_source(model, cfg, test_chains_by_source, device, log)
 
     gc.collect()
     torch.cuda.empty_cache()
