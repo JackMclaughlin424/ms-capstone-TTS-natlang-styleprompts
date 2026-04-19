@@ -190,16 +190,19 @@ def run_epoch(
  
             if is_train:
                 optimizer.zero_grad()
-                loss.backward()
-                if cfg["grad_clip"]:
-                    nn.utils.clip_grad_norm_(
-                        [p for p in model.parameters() if p.requires_grad],
-                        cfg["grad_clip"],
-                    )
-                optimizer.step()
- 
+                if not torch.isnan(loss) and not torch.isinf(loss):
+                    loss.backward()
+                    if cfg["grad_clip"]:
+                        nn.utils.clip_grad_norm_(
+                            [p for p in model.parameters() if p.requires_grad],
+                            cfg["grad_clip"],
+                        )
+                    optimizer.step()
+                else:
+                    log_handler.warning(f"Skipping optimizer step due to NaN/Inf loss at step {global_step}")
                 scheduler.step()
                 global_step += 1
+
  
                 if global_step % cfg["log_every_n_steps"] == 0:
                     lr = scheduler.get_last_lr()[0]

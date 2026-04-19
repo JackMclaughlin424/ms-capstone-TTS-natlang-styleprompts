@@ -239,7 +239,9 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int, overrides: list | None = None):
     def sweep_fn():
         gc.collect()
         torch.cuda.empty_cache()
-        run = wandb.init(settings=wandb.Settings(console="off"))
+        # sweep.py, line 242
+        run = wandb.init(settings=wandb.Settings(console="off", init_timeout=300))
+
         cfg = deepcopy(base_cfg)
 
         for key, val in run.config.items():
