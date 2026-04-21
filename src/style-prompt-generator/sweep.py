@@ -33,7 +33,8 @@ from model.train_helpers import (
     load_config, apply_overrides, set_seed,
     build_model, build_optimizer_and_scheduler,
     wandb_log, compute_bertscore, compute_meteor,
-    compute_chrf, compute_rouge, compute_tag_f1, eval_test_by_source
+    compute_chrf, compute_rouge, compute_tag_f1, eval_test_by_source,
+    assert_no_test_leakage
 )
 
 from train import run_epoch
@@ -82,6 +83,8 @@ def _build_fold_loaders(cfg: dict, train_ids: set, val_ids: set):
     val_loader   = DataLoader(val_ds,   batch_size=cfg["batch_size"], shuffle=False, **loader_kw)
     log.info(f"  {len(train_ds)} train chains  |  {len(val_ds)} val chains")
     return train_loader, val_loader
+
+
 
 
 # Single-fold training 
@@ -236,7 +239,9 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int, overrides: list | None = None):
     def sweep_fn():
         gc.collect()
         torch.cuda.empty_cache()
-        run = wandb.init(settings=wandb.Settings(console="off"))
+        # sweep.py, line 242
+        run = wandb.init(settings=wandb.Settings(console="off", init_timeout=300))
+
         cfg = deepcopy(base_cfg)
 
         for key, val in run.config.items():
@@ -261,10 +266,22 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int, overrides: list | None = None):
             meta_columns=["transcription", "text_description", "source"],
             sample_rate=cfg["sample_rate"],
             max_len_sec=cfg["max_len_sec"],
+            num_turns=cfg["num_turns"],
         )
+
+
+
         meta         = pd.read_parquet(cfg["meta_path"], columns=["conv_id"])
         trainval_arr = np.array([c for c in meta["conv_id"].unique() if c not in test_conv_ids])
 
+        # double check no leakage
+        assert_no_test_leakage(set(trainval_arr), test_conv_ids)
+
+        n_test = sum(len(v) for v in test_chains_by_source.values())
+        log.info(
+            f"Split sizes  trainval_conv_ids={len(trainval_arr)}  test_chains={n_test}  "
+            + "  ".join(f"{src}={len(c)}" for src, c in test_chains_by_source.items())
+        )
 
 
         rng      = np.random.default_rng(cfg["seed"])
