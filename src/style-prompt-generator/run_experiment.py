@@ -30,16 +30,12 @@ import time
 import itertools
 
 from model.train_helpers import (
-    load_config, apply_overrides, set_seed,
-    build_model, build_optimizer_and_scheduler,
-    wandb_log, compute_bertscore, compute_meteor,
-    compute_chrf, compute_rouge, compute_tag_f1, eval_test_by_source,
-    assert_no_test_leakage
+    load_config, apply_overrides, wandb_log, assert_no_test_leakage, 
 )
 
-from train import run_epoch
-from dataset.ConvoStyleDataset import ConvoStyleDataset, collate_pad
-from torch.utils.data import DataLoader
+from sweep import _train_final_and_eval_test
+from dataset.ConvoStyleDataset import ConvoStyleDataset
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -60,59 +56,6 @@ logging.getLogger("transformers").setLevel(logging.WARNING)
 logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 
 
-
-
-def _train_final_and_eval_test(
-    cfg: dict,
-    trainval_ids: set,
-    test_chains_by_source: dict,
-    sweep_run,
-    device: torch.device,
-    global_step: int = 0,
-) -> dict:
-    """Train on all train/val data, then evaluate per source on the held-out test chains."""
-    set_seed(cfg["seed"])
-
-    # Build data loaders
-    ds_kwargs = dict(
-        h5_path=cfg["h5_path"],
-        meta_path=cfg["meta_path"],
-        meta_columns=["transcription", "text_description", "source"],
-        sample_rate=cfg["sample_rate"],
-        num_turns=cfg["num_turns"],
-        max_len_sec=cfg["max_len_sec"],
-    )
-    loader_kw  = dict(collate_fn=collate_pad, num_workers=cfg["num_workers"], pin_memory=True)
-    g          = torch.Generator().manual_seed(cfg["seed"])
-    train_ds   = ConvoStyleDataset(**ds_kwargs, allowed_conv_ids=trainval_ids)
-    train_loader = DataLoader(train_ds, batch_size=cfg["batch_size"], shuffle=True, generator=g, **loader_kw)
-
-
-    model = build_model(cfg, device, log)
-
-    total_steps = len(train_loader) * cfg["num_epochs"]
-    optimizer, scheduler = build_optimizer_and_scheduler(model, cfg, total_steps, log)
-
-    for epoch in range(cfg["num_epochs"]):
-        _, global_step = run_epoch(
-            model, train_loader, optimizer, scheduler,
-            device, cfg, epoch, global_step, wandb_run=None, log_handler=log,
-            is_train=True, use_tqdm=False
-        )
-
-    log.info("Evaluating generation...")
-    model.eval()
-    metrics = eval_test_by_source(
-        model, cfg, test_chains_by_source, device, log
-    )
-
-
-    del train_loader
-    del model, optimizer, scheduler
-    gc.collect()
-    torch.cuda.empty_cache()
-
-    return metrics, global_step
 
 
 

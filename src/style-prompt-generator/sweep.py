@@ -193,10 +193,14 @@ def _train_final_and_eval_test(
         num_turns=cfg["num_turns"],
         max_len_sec=cfg["max_len_sec"],
     )
+    
+    train_ds   = ConvoStyleDataset(**ds_kwargs, allowed_conv_ids=trainval_ids)
+    log.info("Final train_ds chain count: %d", len(train_ds))
+    
     loader_kw  = dict(collate_fn=collate_pad, num_workers=cfg["num_workers"], pin_memory=True)
     g          = torch.Generator().manual_seed(cfg["seed"])
-    train_ds   = ConvoStyleDataset(**ds_kwargs, allowed_conv_ids=trainval_ids)
     train_loader = DataLoader(train_ds, batch_size=cfg["batch_size"], shuffle=True, generator=g, **loader_kw)
+    
 
 
     model = build_model(cfg, device, log)
