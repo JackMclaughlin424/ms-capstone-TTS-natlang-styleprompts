@@ -132,7 +132,7 @@ def run_baseline_for_trial(cfg, shuffled, test_chains_by_source, run, device, gl
         log.info(
             f"Baseline/{src}  bertscore_f1={bs_metrics['bertscore_f1_mean']:.4f}  "
             f"meteor={met_metrics['meteor_mean']:.4f}  chrf={chrf_metrics['chrf_mean']:.4f}  "
-            f"tag_f1={tag_metrics['tag_f1_overall']:.4f}"
+            f"tag_f1={tag_metrics['tag_f1_overall_mean']:.4f}"
         )
         run.summary.update(summary)
         wandb_log(summary, step=global_step, run=run)
@@ -154,7 +154,7 @@ def run_experiment_trial(cfg, trainval_ids, test_chains_by_source, run, device):
         log.info(
             f"Test/{src}  bertscore_f1={src_m['bertscore_f1']:.4f}  "
             f"meteor={src_m['meteor']:.4f}  chrf={src_m['chrf']:.4f}  "
-            f"tag_f1={src_m['tag_f1_overall']:.4f}"
+            f"tag_f1={src_m['tag_f1_overall_mean']:.4f}"
         )
         test_summary = {f"test/{src}/{k}": v for k, v in src_m.items()}
         run.summary.update(test_summary)
