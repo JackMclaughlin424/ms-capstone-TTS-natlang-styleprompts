@@ -30,11 +30,14 @@ import time
 import itertools
 
 from model.train_helpers import (
-    load_config, apply_overrides, wandb_log, assert_no_test_leakage, 
+    load_config, apply_overrides, wandb_log, assert_no_test_leakage,
+    compute_bertscore, compute_meteor, compute_chrf, compute_rouge, compute_tag_f1,
 )
 
+from baseline import load_llm, build_system_prompt, build_user_prompt, batch_query_llm, LLM_REPO
 from sweep import _train_final_and_eval_test
 from dataset.ConvoStyleDataset import ConvoStyleDataset
+
 
 
 logging.basicConfig(
@@ -55,6 +58,109 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("transformers").setLevel(logging.WARNING)
 logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 
+
+def run_baseline_for_trial(cfg, shuffled, test_chains_by_source, run, device, global_step):
+    """
+    Run the few-shot LLM baseline on the pre-built test set for one trial.
+    Few-shot examples are the first num_few_shot chains drawn from the
+    training pool in the trial's already-shuffled conv_id order, built at
+    the same num_turns as the trial so the prompt context lengths match.
+    """
+    num_few_shot         = cfg.get("num_few_shot", 25)
+    max_new_tokens       = cfg.get("max_new_tokens", 80)
+    inference_batch_size = cfg.get("inference_batch_size", 8)
+    llm_repo             = cfg.get("llm_repo", LLM_REPO)
+    device_str           = str(device)
+
+    train_ds = ConvoStyleDataset(
+        h5_path=cfg["h5_path"],
+        meta_path=cfg["meta_path"],
+        meta_columns=["transcription", "text_description", "conv_id"],
+        num_turns=int(cfg["num_turns"]),
+        max_len_sec=float(cfg["max_len_sec"]),
+        allowed_conv_ids=set(shuffled),
+    )
+
+    # group training chains by conv_id, then walk shuffled to get a stable ordered pool
+    conv_id_to_chains: dict = {}
+    for chain in train_ds._chains:
+        cid = chain[-1].get("conv_id")
+        conv_id_to_chains.setdefault(cid, []).append(chain)
+
+    ordered_chains = []
+    for conv_id in shuffled:
+        if conv_id in conv_id_to_chains:
+            ordered_chains.extend(conv_id_to_chains[conv_id])
+        if len(ordered_chains) >= num_few_shot:
+            break
+    few_shot_chains = ordered_chains[:num_few_shot]
+    log.info(f"Baseline: {len(few_shot_chains)} few-shot chains  (num_turns={cfg['num_turns']})")
+
+    log.info(f"Baseline: loading LLM ({llm_repo}) on {device_str}...")
+    tokenizer, llm = load_llm(device_str, repo=llm_repo)
+
+    # build the system prompt once since the few-shot pool is the same for all queries
+    system_prompt = build_system_prompt(few_shot_chains)
+
+    for src, chains in test_chains_by_source.items():
+        full_prompts   = [f"{system_prompt}\n\n---\n\n{build_user_prompt(c)}" for c in chains]
+        ground_truths  = [(c[-1].get("text_description") or "").strip() for c in chains]
+
+        log.info(f"Baseline/{src}: running inference on {len(full_prompts)} chains...")
+        predictions = batch_query_llm(
+            tokenizer, llm, full_prompts, device_str,
+            max_new_tokens=max_new_tokens,
+            batch_size=inference_batch_size,
+        )
+
+        for i, (pred, ref, chain) in enumerate(zip(predictions[:3], ground_truths[:3], chains[:3])):
+            txt = " | ".join(t.get("transcription", "") for t in chain if t.get("transcription"))
+            log.info(f"  [Baseline/{src} Sample {i+1}]")
+            log.info(f"    Dialogue : {txt}")
+            log.info(f"    Predicted: {pred}")
+            log.info(f"    Reference: {ref}")
+
+        bs_metrics    = compute_bertscore(predictions, ground_truths, device=device_str)
+        met_metrics   = compute_meteor(predictions, ground_truths)
+        chrf_metrics  = compute_chrf(predictions, ground_truths)
+        rouge_metrics = compute_rouge(predictions, ground_truths)
+        tag_metrics   = compute_tag_f1(predictions, ground_truths)
+
+        all_metrics = {**bs_metrics, **met_metrics, **chrf_metrics, **rouge_metrics, **tag_metrics}
+        summary     = {f"baseline/{src}/{k}": v for k, v in all_metrics.items()}
+
+        log.info(
+            f"Baseline/{src}  bertscore_f1={bs_metrics['bertscore_f1_mean']:.4f}  "
+            f"meteor={met_metrics['meteor_mean']:.4f}  chrf={chrf_metrics['chrf_mean']:.4f}  "
+            f"tag_f1={tag_metrics['tag_f1_overall']:.4f}"
+        )
+        run.summary.update(summary)
+        wandb_log(summary, step=global_step, run=run)
+
+    del llm, tokenizer
+    gc.collect()
+    if device_str == "cuda":
+        torch.cuda.empty_cache()
+
+
+
+def run_experiment_trial(cfg, trainval_ids, test_chains_by_source, run, device):
+
+    test_metrics, global_step = _train_final_and_eval_test(
+        cfg, trainval_ids, test_chains_by_source, run, device
+    )
+
+    for src, src_m in test_metrics.items():
+        log.info(
+            f"Test/{src}  bertscore_f1={src_m['bertscore_f1']:.4f}  "
+            f"meteor={src_m['meteor']:.4f}  chrf={src_m['chrf']:.4f}  "
+            f"tag_f1={src_m['tag_f1_overall']:.4f}"
+        )
+        test_summary = {f"test/{src}/{k}": v for k, v in src_m.items()}
+        run.summary.update(test_summary)
+        wandb_log(test_summary, step=global_step, run=run)
+
+    return global_step
 
 
 
@@ -140,21 +246,12 @@ def main():
             rng.shuffle(shuffled)
             trainval_ids = set(shuffled)
 
-            test_metrics, _ = _train_final_and_eval_test(
-                cfg, trainval_ids, test_chains_by_source, run, device
-            )
+            global_step = run_experiment_trial(cfg, trainval_ids, test_chains_by_source, run, device)
 
-            for src, src_m in test_metrics.items():
-                log.info(
-                    f"Test/{src}  bertscore_f1={src_m['bertscore_f1']:.4f}  "
-                    f"meteor={src_m['meteor']:.4f}  chrf={src_m['chrf']:.4f}  "
-                    f"tag_f1={src_m['tag_f1_overall']:.4f}"
-                )
-                test_summary = {f"test/{src}/{k}": v for k, v in src_m.items()}
-                run.summary.update(test_summary)
-                wandb_log(test_summary, run=run)
+            run_baseline_for_trial(cfg, shuffled, test_chains_by_source, run, device, global_step)
 
             run.finish()
+
             gc.collect()
             torch.cuda.empty_cache()
 
