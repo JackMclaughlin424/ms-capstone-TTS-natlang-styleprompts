@@ -118,8 +118,8 @@ def main():
                 h5_path=cfg["h5_path"],
                 meta_path=cfg["meta_path"],
                 meta_columns=["transcription", "text_description", "source"],
-                sample_rate=cfg["sample_rate"],
-                max_len_sec=cfg["max_len_sec"],
+                sample_rate=int(cfg["sample_rate"]),
+                max_len_sec=float(cfg["max_len_sec"]),
                 num_turns=int(cfg["num_turns"]),
             )
 
