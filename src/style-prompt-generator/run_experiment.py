@@ -155,7 +155,7 @@ def run_experiment_trial(cfg, trainval_ids, test_chains_by_source, run, device):
         log.info(
             f"Test/{src}  bertscore_f1={src_m['bertscore_f1']:.4f}  "
             f"meteor={src_m['meteor']:.4f}  chrf={src_m['chrf']:.4f}  "
-            f"tag_f1={src_m['tag_f1_overall_mean']:.4f}"
+            f"tag_f1={src_m['tag_f1_overall']:.4f}"
         )
         test_summary = {f"test/{src}/{k}": v for k, v in src_m.items()}
         run.summary.update(test_summary)
