@@ -31,7 +31,7 @@ import itertools
 
 from model.train_helpers import (
     load_config, apply_overrides, wandb_log, assert_no_test_leakage,
-    compute_bertscore, compute_meteor, compute_chrf, compute_rouge, compute_tag_f1,
+    compute_bertscore, compute_meteor, compute_chrf, compute_rouge, compute_tag_f1,_flatten
 )
 
 from baseline import load_llm, build_system_prompt, build_user_prompt, batch_query_llm, LLM_REPO
@@ -126,13 +126,14 @@ def run_baseline_for_trial(cfg, shuffled, test_chains_by_source, run, device, gl
         rouge_metrics = compute_rouge(predictions, ground_truths)
         tag_metrics   = compute_tag_f1(predictions, ground_truths, src)
 
-        all_metrics = {**bs_metrics, **met_metrics, **chrf_metrics, **rouge_metrics, **tag_metrics}
+        all_metrics = {**_flatten(bs_metrics), **_flatten(met_metrics), **_flatten(chrf_metrics), **_flatten(rouge_metrics), **_flatten(tag_metrics)}
+
         summary     = {f"baseline/{src}/{k}": v for k, v in all_metrics.items()}
 
         log.info(
             f"Baseline/{src}  bertscore_f1={bs_metrics['bertscore_f1_mean']:.4f}  "
             f"meteor={met_metrics['meteor_mean']:.4f}  chrf={chrf_metrics['chrf_mean']:.4f}  "
-            f"tag_f1={tag_metrics['tag_f1_overall_mean']:.4f}"
+            f"tag_f1={tag_metrics['tag_f1_overall']:.4f}"
         )
         run.summary.update(summary)
         wandb_log(summary, step=global_step, run=run)
