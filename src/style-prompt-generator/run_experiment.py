@@ -59,6 +59,48 @@ logging.getLogger("transformers").setLevel(logging.WARNING)
 logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 
 
+def build_fewshot_set(train_ds, shuffled,cfg,num_few_shot):
+        # build the full chain pool grouped by source to enable proportional sampling
+    conv_id_to_chains: dict = {}
+    for chain in train_ds._chains:
+        cid = chain[-1].get("conv_id")
+        conv_id_to_chains.setdefault(cid, []).append(chain)
+
+    ordered_chains = []
+    for conv_id in shuffled:
+        if conv_id in conv_id_to_chains:
+            ordered_chains.extend(conv_id_to_chains[conv_id])
+
+    # group by source so we can mirror the training set's source proportions
+    chains_by_source: dict = {}
+    for chain in ordered_chains:
+        src = str(chain[-1].get("source", "unknown")).lower()
+        chains_by_source.setdefault(src, []).append(chain)
+
+    total = len(ordered_chains)
+    rng = np.random.default_rng(cfg["seed"])
+    few_shot_chains = []
+    allocated = 0
+    sources = sorted(chains_by_source)  # sorted for deterministic rng consumption order
+    for i, src in enumerate(sources):
+        pool = chains_by_source[src]
+        # give the last source any remaining slots to avoid rounding under-allocation
+        if i == len(sources) - 1:
+            n = max(0, num_few_shot - allocated)
+
+        else:
+            n = round(num_few_shot * len(pool) / total)
+        n = min(n, len(pool))
+        idxs = rng.choice(len(pool), size=n, replace=False)
+        few_shot_chains.extend(pool[j] for j in idxs)
+        allocated += n
+
+    source_counts = {src: sum(1 for c in few_shot_chains if str(c[-1].get("source","")).lower() == src) for src in sources}
+    log.info(f"Baseline: {len(few_shot_chains)} few-shot chains sampled with seed={cfg['seed']}  per-source={source_counts}  (num_turns={cfg['num_turns']})")
+
+    return few_shot_chains
+
+
 def run_baseline_for_trial(cfg, shuffled, test_chains_by_source, run, device, global_step):
     """
     Run the few-shot LLM baseline on the pre-built test set for one trial.
@@ -75,27 +117,14 @@ def run_baseline_for_trial(cfg, shuffled, test_chains_by_source, run, device, gl
     train_ds = ConvoStyleDataset(
         h5_path=cfg["h5_path"],
         meta_path=cfg["meta_path"],
-        meta_columns=["transcription", "text_description", "conv_id"],
+        meta_columns=["transcription", "text_description", "conv_id", "source"],
         num_turns=int(cfg["num_turns"]),
         max_len_sec=float(cfg["max_len_sec"]),
         allowed_conv_ids=set(shuffled),
     )
 
-    # group training chains by conv_id, then walk shuffled to get a stable ordered pool
-    conv_id_to_chains: dict = {}
-    for chain in train_ds._chains:
-        cid = chain[-1].get("conv_id")
-        conv_id_to_chains.setdefault(cid, []).append(chain)
-
-    ordered_chains = []
-    for conv_id in shuffled:
-        if conv_id in conv_id_to_chains:
-            ordered_chains.extend(conv_id_to_chains[conv_id])
-        if len(ordered_chains) >= num_few_shot:
-            break
-    few_shot_chains = ordered_chains[:num_few_shot]
-    log.info(f"Baseline: {len(few_shot_chains)} few-shot chains  (num_turns={cfg['num_turns']})")
-
+    few_shot_chains = build_fewshot_set(train_ds, shuffled,cfg,num_few_shot)
+    
     log.info(f"Baseline: loading LLM ({llm_repo}) on {device_str}...")
     tokenizer, llm = load_llm(device_str, repo=llm_repo)
 
