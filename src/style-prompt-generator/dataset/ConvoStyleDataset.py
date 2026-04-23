@@ -19,7 +19,7 @@ _STYLETALK_FINAL_TURN_INDEX = 4
 # Define test set
 _TEST_SEED                = 999
 _TEST_NUM_TURNS           = 5
-_TEST_N_CHAINS_PER_SOURCE = 150  # 150 × n_sources ≈ 300 total chains held out
+_TEST_N_CHAINS_PER_SOURCE = 250  # 250 × n_sources ≈ 500 total chains held out
 
 
 
