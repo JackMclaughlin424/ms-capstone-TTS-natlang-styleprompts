@@ -124,7 +124,7 @@ def run_baseline_for_trial(cfg, shuffled, test_chains_by_source, run, device, gl
         met_metrics   = compute_meteor(predictions, ground_truths)
         chrf_metrics  = compute_chrf(predictions, ground_truths)
         rouge_metrics = compute_rouge(predictions, ground_truths)
-        tag_metrics   = compute_tag_f1(predictions, ground_truths)
+        tag_metrics   = compute_tag_f1(predictions, ground_truths, src)
 
         all_metrics = {**bs_metrics, **met_metrics, **chrf_metrics, **rouge_metrics, **tag_metrics}
         summary     = {f"baseline/{src}/{k}": v for k, v in all_metrics.items()}
