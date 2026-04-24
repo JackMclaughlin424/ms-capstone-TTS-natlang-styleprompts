@@ -136,11 +136,15 @@ def run_baseline_for_trial(cfg, shuffled, test_chains_by_source, run, device, gl
         ground_truths  = [(c[-1].get("text_description") or "").strip() for c in chains]
 
         log.info(f"Baseline/{src}: running inference on {len(full_prompts)} chains...")
+        t0_infer = time.time()
         predictions = batch_query_llm(
             tokenizer, llm, full_prompts, device_str,
             max_new_tokens=max_new_tokens,
             batch_size=inference_batch_size,
         )
+        inference_time = time.time() - t0_infer
+        log.info(f"Baseline/{src}: inference_time={inference_time:.1f}s")
+
 
         for i, (pred, ref, chain) in enumerate(zip(predictions[:3], ground_truths[:3], chains[:3])):
             txt = " | ".join(t.get("transcription", "") for t in chain if t.get("transcription"))
@@ -157,7 +161,9 @@ def run_baseline_for_trial(cfg, shuffled, test_chains_by_source, run, device, gl
 
         all_metrics = {**_flatten(bs_metrics), **_flatten(met_metrics), **_flatten(chrf_metrics), **_flatten(rouge_metrics), **_flatten(tag_metrics)}
 
-        summary     = {f"baseline/{src}/{k}": v for k, v in all_metrics.items()}
+        summary = {f"baseline/{src}/{k}": v for k, v in all_metrics.items()}
+        summary[f"baseline/{src}/inference_time_s"] = inference_time
+
 
         log.info(
             f"Baseline/{src}  bertscore_f1={all_metrics['bertscore_f1']:.4f}  "
@@ -176,7 +182,7 @@ def run_baseline_for_trial(cfg, shuffled, test_chains_by_source, run, device, gl
 
 def run_experiment_trial(cfg, trainval_ids, test_chains_by_source, run, device):
 
-    test_metrics, global_step = _train_final_and_eval_test(
+    test_metrics, global_step, training_time, inference_time = _train_final_and_eval_test(
         cfg, trainval_ids, test_chains_by_source, run, device
     )
 
@@ -190,7 +196,13 @@ def run_experiment_trial(cfg, trainval_ids, test_chains_by_source, run, device):
         run.summary.update(test_summary)
         wandb_log(test_summary, step=global_step, run=run)
 
+    time_summary = {"trial/training_time_s": training_time, "trial/inference_time_s": inference_time}
+    log.info(f"Trial  training_time={training_time:.1f}s  inference_time={inference_time:.1f}s")
+    run.summary.update(time_summary)
+    wandb_log(time_summary, step=global_step, run=run)
+
     return global_step
+
 
 
 
