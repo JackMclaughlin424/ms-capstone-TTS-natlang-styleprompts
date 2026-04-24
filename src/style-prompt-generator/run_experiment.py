@@ -31,8 +31,10 @@ import itertools
 
 from model.train_helpers import (
     load_config, apply_overrides, wandb_log, assert_no_test_leakage,
-    compute_bertscore, compute_meteor, compute_chrf, compute_rouge, compute_tag_f1,_flatten
+    compute_bertscore, compute_meteor, compute_chrf, compute_rouge, compute_tag_f1,
+    compute_dist, compute_pred_semantic_sim, _flatten
 )
+
 
 from baseline import load_llm, build_system_prompt, build_user_prompt, batch_query_llm, LLM_REPO
 from sweep import _train_final_and_eval_test
@@ -158,8 +160,12 @@ def run_baseline_for_trial(cfg, shuffled, test_chains_by_source, run, device, gl
         chrf_metrics  = compute_chrf(predictions, ground_truths)
         rouge_metrics = compute_rouge(predictions, ground_truths)
         tag_metrics   = compute_tag_f1(predictions, ground_truths, src)
+        div_metrics  = compute_dist(predictions)
+        psem_metrics = compute_pred_semantic_sim(predictions, device=device_str)
 
-        all_metrics = {**_flatten(bs_metrics), **_flatten(met_metrics), **_flatten(chrf_metrics), **_flatten(rouge_metrics), **_flatten(tag_metrics)}
+
+        all_metrics = {**_flatten(bs_metrics), **_flatten(met_metrics), **_flatten(chrf_metrics), **_flatten(rouge_metrics), **_flatten(tag_metrics), **div_metrics, **psem_metrics}
+
 
         summary = {f"baseline/{src}/{k}": v for k, v in all_metrics.items()}
         summary[f"baseline/{src}/inference_time_s"] = inference_time

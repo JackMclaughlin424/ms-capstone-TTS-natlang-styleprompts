@@ -693,6 +693,30 @@ def compute_tag_f1(
 
     return metrics
 
+def compute_dist(preds: List[str]) -> Dict[str, float]:
+    """Dist-1 and Dist-2: proportion of unique unigrams/bigrams across all predictions."""
+    all_unigrams, all_bigrams = [], []
+    for pred in preds:
+        tokens = pred.lower().split()
+        all_unigrams.extend(tokens)
+        all_bigrams.extend(zip(tokens, tokens[1:]))
+    dist1 = len(set(all_unigrams)) / len(all_unigrams) if all_unigrams else 0.0
+    dist2 = len(set(all_bigrams))  / len(all_bigrams)  if all_bigrams  else 0.0
+    return {"dist1": dist1, "dist2": dist2}
+
+
+def compute_pred_semantic_sim(preds: List[str], device: str = "cpu") -> Dict[str, float]:
+    """Mean pairwise cosine similarity of sentence embeddings across all predictions.
+    Values near 1.0 indicate low diversity; near 0.0 indicates high diversity."""
+    from sentence_transformers import SentenceTransformer
+    embedder = SentenceTransformer("all-MiniLM-L6-v2", device=device)
+    embs = embedder.encode(preds, convert_to_tensor=True, normalize_embeddings=True)
+    sim_mat = embs @ embs.T
+    n = sim_mat.shape[0]
+    off_diag = sim_mat[~torch.eye(n, dtype=torch.bool, device=sim_mat.device)].mean().item()
+    del embedder, embs, sim_mat
+    return {"pred_semantic_sim": off_diag}
+
 
 
 def _flatten(d: dict) -> dict:
@@ -776,6 +800,9 @@ def eval_test_by_source(
         chrf = compute_chrf(all_preds, all_refs)
         rou  = compute_rouge(all_preds, all_refs)
         tf1  = compute_tag_f1(all_preds, all_refs, src)
+        div  = compute_dist(all_preds)
+        psem = compute_pred_semantic_sim(all_preds, device=str(device))
+
 
         # automate logging of lots of metrics
         source_metrics[src] = {
@@ -784,11 +811,14 @@ def eval_test_by_source(
             **_flatten(chrf),
             **_flatten(rou),
             **_flatten(tf1),
+            **div,
+            **psem,
             "vec_std":           vec_std,
             "vec_norm_cv":       vec_norm_cv,
             "mean_cosine_sim":   off_diag,
             "inference_time_s":  inference_time,
         }
+
 
 
 
