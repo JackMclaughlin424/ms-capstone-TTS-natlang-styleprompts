@@ -245,11 +245,12 @@ def main():
 
     # master rng derives per-trial seeds so each trial is reproducible but distinct
     master_rng = np.random.default_rng(base_cfg["seed"])
+    trial_seeds = [int(master_rng.integers(0, 2**31)) for _ in range(args.num_trials)]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     for param_value in param_values:
         for trial_idx in range(args.num_trials):
-            trial_seed = int(master_rng.integers(0, 2**31))
+            trial_seed = trial_seeds[trial_idx]
 
             cfg = deepcopy(base_cfg)
 
