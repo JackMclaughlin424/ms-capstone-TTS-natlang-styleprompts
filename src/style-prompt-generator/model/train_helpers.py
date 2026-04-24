@@ -725,6 +725,7 @@ def eval_test_by_source(
         all_preds, all_refs, all_texts, all_vecs = [], [], [], []
 
 
+        t0_infer = time.time()
         with torch.no_grad():
             for batch in test_loader:
                 with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
@@ -740,13 +741,15 @@ def eval_test_by_source(
                     ctx = model.scfa(audio, lengths, texts, speaker_ids, text_only)
                     vec = model.pooler(ctx)
                     del ctx
-                    all_vecs.append(vec.float().detach().cpu())  # collect before delete
+                    all_vecs.append(vec.float().detach().cpu())
                     preds = model.style_generator.generate(vec)
                     del vec
                 
                 all_preds.extend(preds)
                 all_refs.extend([chain[-1] for chain in targets])
                 all_texts.extend(texts)
+        inference_time = time.time() - t0_infer
+
 
         # free GPU memory
         del test_loader
@@ -781,10 +784,12 @@ def eval_test_by_source(
             **_flatten(chrf),
             **_flatten(rou),
             **_flatten(tf1),
-            "vec_std":         vec_std,
-            "vec_norm_cv":     vec_norm_cv,
-            "mean_cosine_sim": off_diag,
+            "vec_std":           vec_std,
+            "vec_norm_cv":       vec_norm_cv,
+            "mean_cosine_sim":   off_diag,
+            "inference_time_s":  inference_time,
         }
+
 
 
 

@@ -219,12 +219,10 @@ def _train_final_and_eval_test(
 
     log.info("Evaluating generation...")
     model.eval()
-    t0_infer = time.time()
     metrics = eval_test_by_source(
         model, cfg, test_chains_by_source, device, log
     )
-    inference_time = time.time() - t0_infer
-
+    inference_time = sum(m.get("inference_time_s", 0.0) for m in metrics.values())
 
     del train_loader
     del model, optimizer, scheduler
@@ -232,6 +230,7 @@ def _train_final_and_eval_test(
     torch.cuda.empty_cache()
 
     return metrics, global_step, training_time, inference_time
+
 
 
 

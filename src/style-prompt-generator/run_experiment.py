@@ -196,8 +196,8 @@ def run_experiment_trial(cfg, trainval_ids, test_chains_by_source, run, device):
         run.summary.update(test_summary)
         wandb_log(test_summary, step=global_step, run=run)
 
-    time_summary = {"trial/training_time_s": training_time, "trial/inference_time_s": inference_time}
-    log.info(f"Trial  training_time={training_time:.1f}s  inference_time={inference_time:.1f}s")
+    time_summary = {"trial/training_time_s": training_time}
+    log.info(f"Trial  training_time={training_time:.1f}s  Tot Inference time={inference_time:.1f}s")
     run.summary.update(time_summary)
     wandb_log(time_summary, step=global_step, run=run)
 
