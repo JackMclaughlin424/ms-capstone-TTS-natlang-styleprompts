@@ -241,6 +241,8 @@ def main():
     param_name, param_values = next(iter(experiment_config.items()))
     log.info(f"Experiment parameter: {param_name}  values: {param_values}  trials_per_value: {args.num_trials}")
 
+    
+
     # master rng derives per-trial seeds so each trial is reproducible but distinct
     master_rng = np.random.default_rng(base_cfg["seed"])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -248,8 +250,15 @@ def main():
     for param_value in param_values:
         for trial_idx in range(args.num_trials):
             trial_seed = int(master_rng.integers(0, 2**31))
+
             cfg = deepcopy(base_cfg)
-            cfg[param_name] = param_value
+
+            # expand shared param into per-encoder keys
+            if param_name == "num_unfrozen_embedder_layers":
+                cfg["num_unfrozen_bert"]  = param_value
+                cfg["num_unfrozen_wavlm"] = param_value
+            else:   
+                cfg[param_name] = param_value
             cfg["seed"]     = trial_seed
 
             log.info(f"=== {param_name}={param_value}  trial={trial_idx+1}/{args.num_trials}  seed={trial_seed} ===")
