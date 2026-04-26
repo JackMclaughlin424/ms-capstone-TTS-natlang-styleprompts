@@ -188,7 +188,7 @@ def run_baseline_for_trial(cfg, shuffled, test_chains_by_source, run, device, gl
 
 def run_experiment_trial(cfg, trainval_ids, test_chains_by_source, run, device):
 
-    test_metrics, global_step, training_time, inference_time = _train_final_and_eval_test(
+    test_metrics, global_step, training_time, inference_time, trainable_params = _train_final_and_eval_test(
         cfg, trainval_ids, test_chains_by_source, run, device
     )
 
@@ -202,8 +202,11 @@ def run_experiment_trial(cfg, trainval_ids, test_chains_by_source, run, device):
         run.summary.update(test_summary)
         wandb_log(test_summary, step=global_step, run=run)
 
-    time_summary = {"trial/training_time_s": training_time}
-    log.info(f"Trial  training_time={training_time:.1f}s  Tot Inference time={inference_time:.1f}s")
+    time_summary = {
+        "trial/training_time_s":   training_time,
+        "trial/trainable_params":  trainable_params,
+    }
+    log.info(f"Trial  training_time={training_time:.1f}s  Tot Inference time={inference_time:.1f}s  trainable_params={trainable_params:,}")
     run.summary.update(time_summary)
     wandb_log(time_summary, step=global_step, run=run)
 
