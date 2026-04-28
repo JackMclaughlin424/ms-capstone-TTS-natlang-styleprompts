@@ -307,6 +307,10 @@ def build_model(cfg: Dict[str, Any], device: torch.device, log) -> SCFAWithStyle
     ).to(device)
 
     model = SCFAWithStyleHead(scfa=scfa, pooler=pooler, style_generator=generator)
+
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    log.info(f"Trainable parameters: {trainable_params:,}")
+
     return model
 
 
@@ -347,7 +351,7 @@ def build_optimizer_and_scheduler(model: SCFAWithStyleHead, cfg: Dict[str, Any],
     # only optimize parameters that require gradients
     # (LLM is frozen inside StylePromptGenerator; backbone layers may be partially frozen)
     trainable = [p for p in model.parameters() if p.requires_grad]
-    log.info(f"Trainable parameters: {sum(p.numel() for p in trainable):,}")
+    # log.info(f"Trainable parameters: {sum(p.numel() for p in trainable):,}")
 
     optimizer = torch.optim.AdamW(
         trainable,

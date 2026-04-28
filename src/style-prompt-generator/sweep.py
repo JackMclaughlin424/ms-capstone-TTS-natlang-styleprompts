@@ -204,6 +204,7 @@ def _train_final_and_eval_test(
 
 
     model = build_model(cfg, device, log)
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
     total_steps = len(train_loader) * cfg["num_epochs"]
     optimizer, scheduler = build_optimizer_and_scheduler(model, cfg, total_steps, log)
@@ -229,7 +230,8 @@ def _train_final_and_eval_test(
     gc.collect()
     torch.cuda.empty_cache()
 
-    return metrics, global_step, training_time, inference_time
+    return metrics, global_step, training_time, inference_time, trainable_params
+
 
 
 
@@ -348,7 +350,7 @@ def _make_sweep_fn(base_cfg: dict, n_folds: int, overrides: list | None = None):
 
 
         
-        test_metrics, global_step, _, _ = _train_final_and_eval_test(
+        test_metrics, global_step, _, _, _ = _train_final_and_eval_test(
             cfg, trainval_ids, test_chains_by_source, run, device, global_step
         )
 

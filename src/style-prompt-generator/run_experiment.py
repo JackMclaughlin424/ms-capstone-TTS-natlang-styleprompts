@@ -188,7 +188,7 @@ def run_baseline_for_trial(cfg, shuffled, test_chains_by_source, run, device, gl
 
 def run_experiment_trial(cfg, trainval_ids, test_chains_by_source, run, device):
 
-    test_metrics, global_step, training_time, inference_time = _train_final_and_eval_test(
+    test_metrics, global_step, training_time, inference_time, trainable_params = _train_final_and_eval_test(
         cfg, trainval_ids, test_chains_by_source, run, device
     )
 
@@ -202,8 +202,11 @@ def run_experiment_trial(cfg, trainval_ids, test_chains_by_source, run, device):
         run.summary.update(test_summary)
         wandb_log(test_summary, step=global_step, run=run)
 
-    time_summary = {"trial/training_time_s": training_time}
-    log.info(f"Trial  training_time={training_time:.1f}s  Tot Inference time={inference_time:.1f}s")
+    time_summary = {
+        "trial/training_time_s":   training_time,
+        "trial/trainable_params":  trainable_params,
+    }
+    log.info(f"Trial  training_time={training_time:.1f}s  Tot Inference time={inference_time:.1f}s  trainable_params={trainable_params:,}")
     run.summary.update(time_summary)
     wandb_log(time_summary, step=global_step, run=run)
 
@@ -221,8 +224,9 @@ def main():
     )
     parser.add_argument("--config",            required=True,
                         help="Base config JSON with fixed hyperparameters.")
-    parser.add_argument("--experiment_config", required=True,
-                        help="JSON with one key mapping to a list of values to sweep.")
+    parser.add_argument("--experiment_config", required=False, default=None,
+                        help="JSON with one key mapping to a list of values to sweep. "
+                             "Omit to run num_trials baseline-only trials on the base config.")
     parser.add_argument("--num_trials",        type=int, default=3,
                         help="Number of independent training runs per parameter value.")
     parser.add_argument("--override",          nargs="*", metavar="KEY=VALUE",
@@ -232,15 +236,16 @@ def main():
     base_cfg = load_config(args.config)
     apply_overrides(base_cfg, args.override)
 
-    with open(args.experiment_config) as f:
-        experiment_config = json.load(f)
-
-    if len(experiment_config) != 1:
-        raise ValueError(f"experiment_config must contain exactly one parameter, got: {list(experiment_config.keys())}")
-
-    param_name, param_values = next(iter(experiment_config.items()))
-    log.info(f"Experiment parameter: {param_name}  values: {param_values}  trials_per_value: {args.num_trials}")
-
+    if args.experiment_config is not None:
+        with open(args.experiment_config) as f:
+            experiment_config = json.load(f)
+        if len(experiment_config) != 1:
+            raise ValueError(f"experiment_config must contain exactly one parameter, got: {list(experiment_config.keys())}")
+        param_name, param_values = next(iter(experiment_config.items()))
+        log.info(f"Experiment parameter: {param_name}  values: {param_values}  trials_per_value: {args.num_trials}")
+    else:
+        param_name, param_values = None, [None]
+        log.info(f"No experiment config - running {args.num_trials} baseline trials on base config.")
     
 
     # master rng derives per-trial seeds so each trial is reproducible but distinct
@@ -254,29 +259,32 @@ def main():
 
             cfg = deepcopy(base_cfg)
 
-            # expand shared param into per-encoder keys
-            if param_name == "num_unfrozen_embedder_layers":
-                cfg["num_unfrozen_bert"]  = param_value
-                cfg["num_unfrozen_wavlm"] = param_value
-            else:   
+            if param_name is not None:
                 cfg[param_name] = param_value
-            cfg["seed"]     = trial_seed
+            cfg["seed"] = trial_seed
 
-            log.info(f"=== {param_name}={param_value}  trial={trial_idx+1}/{args.num_trials}  seed={trial_seed} ===")
+            if param_name is not None:
+                log.info(f"=== {param_name}={param_value}  trial={trial_idx+1}/{args.num_trials}  seed={trial_seed} ===")
+            else:
+                log.info(f"=== baseline trial={trial_idx+1}/{args.num_trials}  seed={trial_seed} ===")
             log.info(f"Run config: {json.dumps(cfg, indent=2, default=str)}")
+
+            wandb_cfg = {
+                **cfg,
+                "trial_idx":  trial_idx,
+                "num_trials": args.num_trials,
+            }
+            if param_name is not None:
+                wandb_cfg["experiment_param"] = param_name
+                wandb_cfg["experiment_value"] = param_value
 
             run = wandb.init(
                 project=cfg["wandb_project"],
                 entity=cfg.get("wandb_entity"),
-                config={
-                    **cfg,
-                    "experiment_param": param_name,
-                    "experiment_value": param_value,
-                    "trial_idx":        trial_idx,
-                    "num_trials":       args.num_trials,
-                },
+                config=wandb_cfg,
                 settings=wandb.Settings(console="off", init_timeout=300),
             )
+
 
             test_chains_by_source, test_conv_ids = ConvoStyleDataset.make_fixed_test_split(
                 h5_path=cfg["h5_path"],
