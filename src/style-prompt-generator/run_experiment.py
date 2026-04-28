@@ -103,7 +103,7 @@ def build_fewshot_set(train_ds, shuffled,cfg,num_few_shot):
     return few_shot_chains
 
 
-def run_baseline_for_trial(cfg, shuffled, test_chains_by_source, run, device, global_step):
+def run_baseline_for_trial(cfg, shuffled, test_chains_by_source, run, device):
     """
     Run the few-shot LLM baseline on the pre-built test set for one trial.
     Few-shot examples are the first num_few_shot chains drawn from the
@@ -177,7 +177,8 @@ def run_baseline_for_trial(cfg, shuffled, test_chains_by_source, run, device, gl
             f"tag_f1={all_metrics['tag_f1_overall']:.4f}"
         )
         run.summary.update(summary)
-        wandb_log(summary, step=global_step, run=run)
+        wandb_log(summary, step=0, run=run)
+
 
     del llm, tokenizer
     gc.collect()
@@ -278,13 +279,7 @@ def main():
                 wandb_cfg["experiment_param"] = param_name
                 wandb_cfg["experiment_value"] = param_value
 
-            run = wandb.init(
-                project=cfg["wandb_project"],
-                entity=cfg.get("wandb_entity"),
-                config=wandb_cfg,
-                settings=wandb.Settings(console="off", init_timeout=300),
-            )
-
+            run_label = f"{param_name}={param_value}_trial{trial_idx}" if param_name is not None else f"trial{trial_idx}"
 
             test_chains_by_source, test_conv_ids = ConvoStyleDataset.make_fixed_test_split(
                 h5_path=cfg["h5_path"],
@@ -294,7 +289,6 @@ def main():
                 max_len_sec=float(cfg["max_len_sec"]),
                 num_turns=int(cfg["num_turns"]),
             )
-
 
             meta         = pd.read_parquet(cfg["meta_path"], columns=["conv_id"])
             trainval_arr = np.array([c for c in meta["conv_id"].unique() if c not in test_conv_ids])
@@ -306,17 +300,31 @@ def main():
                 + "  ".join(f"{src}={len(c)}" for src, c in test_chains_by_source.items())
             )
 
-            # shuffle trainval with the trial seed so each trial sees a different ordering
             rng      = np.random.default_rng(trial_seed)
             shuffled = trainval_arr.copy()
             rng.shuffle(shuffled)
             trainval_ids = set(shuffled)
 
-            global_step = run_experiment_trial(cfg, trainval_ids, test_chains_by_source, run, device)
+            run_test = wandb.init(
+                project=cfg["wandb_project"],
+                entity=cfg.get("wandb_entity"),
+                config={**wandb_cfg, "run_type": "test"},
+                name=f"test_{run_label}",
+                settings=wandb.Settings(console="off", init_timeout=300),
+            )
+            run_experiment_trial(cfg, trainval_ids, test_chains_by_source, run_test, device)
+            run_test.finish()
 
-            run_baseline_for_trial(cfg, shuffled, test_chains_by_source, run, device, global_step)
+            run_baseline = wandb.init(
+                project=cfg["wandb_project"],
+                entity=cfg.get("wandb_entity"),
+                config={**wandb_cfg, "run_type": "baseline"},
+                name=f"baseline_{run_label}",
+                settings=wandb.Settings(console="off", init_timeout=300),
+            )
+            run_baseline_for_trial(cfg, shuffled, test_chains_by_source, run_baseline, device)
+            run_baseline.finish()
 
-            run.finish()
 
             gc.collect()
             torch.cuda.empty_cache()
