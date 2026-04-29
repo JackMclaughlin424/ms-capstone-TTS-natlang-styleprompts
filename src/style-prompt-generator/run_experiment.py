@@ -267,7 +267,7 @@ def main():
             if param_name is not None:
                 log.info(f"=== {param_name}={param_value}  trial={trial_idx+1}/{args.num_trials}  seed={trial_seed} ===")
             else:
-                log.info(f"=== baseline trial={trial_idx+1}/{args.num_trials}  seed={trial_seed} ===")
+                log.info(f"=== Trial={trial_idx+1}/{args.num_trials}  seed={trial_seed} ===")
             log.info(f"Run config: {json.dumps(cfg, indent=2, default=str)}")
 
             wandb_cfg = {
