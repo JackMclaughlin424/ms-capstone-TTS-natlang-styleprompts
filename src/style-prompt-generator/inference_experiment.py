@@ -75,7 +75,7 @@ def build_fewshot_set(train_ds, shuffled, cfg, num_few_shot):
     return few_shot_chains
 
 
-def run_baseline_for_trial(cfg, shuffled, test_chains_by_source, run, device):
+def run_baseline_for_trial(cfg, shuffled, test_chains_by_source, device):
     num_few_shot         = cfg.get("num_few_shot", 25)
     max_new_tokens       = cfg.get("max_new_tokens", 80)
     inference_batch_size = cfg.get("inference_batch_size", 8)
@@ -95,10 +95,17 @@ def run_baseline_for_trial(cfg, shuffled, test_chains_by_source, run, device):
 
     log.info(f"Baseline: loading LLM ({llm_repo}) on {device_str}...")
     tokenizer, llm = load_llm(device_str, repo=llm_repo)
-
     system_prompt = build_system_prompt(few_shot_chains)
 
     for src, chains in test_chains_by_source.items():
+        run_baseline = wandb.init(
+            project=cfg["wandb_project"],
+            entity=cfg.get("wandb_entity"),
+            config={**cfg, "run_type": "baseline", "dataset": src},
+            name=f"infer_baseline_{src}",
+            settings=wandb.Settings(console="off", init_timeout=300),
+        )
+
         full_prompts  = [f"{system_prompt}\n\n---\n\n{build_user_prompt(c)}" for c in chains]
         ground_truths = [(c[-1].get("text_description") or "").strip() for c in chains]
 
@@ -128,17 +135,17 @@ def run_baseline_for_trial(cfg, shuffled, test_chains_by_source, run, device):
         psem_metrics  = compute_pred_semantic_sim(predictions, device=device_str)
 
         all_metrics = {**_flatten(bs_metrics), **_flatten(met_metrics), **_flatten(chrf_metrics), **_flatten(rouge_metrics), **_flatten(tag_metrics), **div_metrics, **psem_metrics}
-
-        summary = {f"baseline/{src}/{k}": v for k, v in all_metrics.items()}
-        summary[f"baseline/{src}/inference_time_s"] = inference_time
+        all_metrics["inference_time_s"] = inference_time
 
         log.info(
             f"Baseline/{src}  bertscore_f1={all_metrics['bertscore_f1']:.4f}  "
             f"meteor={all_metrics['meteor']:.4f}  chrf={all_metrics['chrf']:.4f}  "
             f"tag_f1={all_metrics['tag_f1_overall']:.4f}"
         )
-        run.summary.update(summary)
-        wandb_log(summary, step=0, run=run)
+        summary = {f"baseline/{src}/{k}": v for k, v in all_metrics.items()}
+        run_baseline.summary.update(summary)
+        wandb_log(summary, step=0, run=run_baseline)
+        run_baseline.finish()
 
     del llm, tokenizer
     gc.collect()
@@ -146,8 +153,9 @@ def run_baseline_for_trial(cfg, shuffled, test_chains_by_source, run, device):
         torch.cuda.empty_cache()
 
 
-def run_inference_trial(cfg, checkpoint_path, test_chains_by_source, run, device):
-    """Load a trained checkpoint and evaluate on the test set without any training."""
+
+def run_inference_trial(cfg, checkpoint_path, test_chains_by_source, device):
+    """Load a trained checkpoint once, then evaluate each source under its own wandb run."""
     set_seed(cfg["seed"])
 
     model = build_model(cfg, device, log)
@@ -156,26 +164,34 @@ def run_inference_trial(cfg, checkpoint_path, test_chains_by_source, run, device
     log.info(f"Loaded final model state_dict: {checkpoint_path}")
     model.eval()
 
-    metrics = eval_test_by_source(model, cfg, test_chains_by_source, device, log)
-    inference_time = sum(m.get("inference_time_s", 0.0) for m in metrics.values())
+    for src, chains in test_chains_by_source.items():
+        run_test = wandb.init(
+            project=cfg["wandb_project"],
+            entity=cfg.get("wandb_entity"),
+            config={**cfg, "checkpoint": checkpoint_path, "run_type": "test", "dataset": src},
+            name=f"infer_test_{src}",
+            settings=wandb.Settings(console="off", init_timeout=300),
+        )
 
-    for src, src_m in metrics.items():
+        src_metrics = eval_test_by_source(model, cfg, {src: chains}, device, log)
+        src_m = src_metrics[src]
+        inference_time = src_m.get("inference_time_s", 0.0)
+
         log.info(
             f"Test/{src}  bertscore_f1={src_m['bertscore_f1']:.4f}  "
             f"meteor={src_m['meteor']:.4f}  chrf={src_m['chrf']:.4f}  "
             f"tag_f1={src_m['tag_f1_overall']:.4f}"
         )
-        test_summary = {f"test/{src}/{k}": v for k, v in src_m.items()}
-        run.summary.update(test_summary)
-        wandb_log(test_summary, step=0, run=run)
-
-    log.info(f"Total inference_time={inference_time:.1f}s")
-    run.summary.update({"trial/inference_time_s": inference_time})
-    wandb_log({"trial/inference_time_s": inference_time}, step=0, run=run)
+        summary = {f"test/{src}/{k}": v for k, v in src_m.items()}
+        summary["trial/inference_time_s"] = inference_time
+        run_test.summary.update(summary)
+        wandb_log(summary, step=0, run=run_test)
+        run_test.finish()
 
     del model
     gc.collect()
     torch.cuda.empty_cache()
+
 
 
 def main():
@@ -222,29 +238,14 @@ def main():
     shuffled = trainval_arr.copy()
     rng.shuffle(shuffled)
 
-    run_test = wandb.init(
-        project=cfg["wandb_project"],
-        entity=cfg.get("wandb_entity"),
-        config={**cfg, "checkpoint": args.checkpoint, "run_type": "test"},
-        name="infer_test",
-        settings=wandb.Settings(console="off", init_timeout=300),
-    )
-    run_inference_trial(cfg, args.checkpoint, test_chains_by_source, run_test, device)
-    run_test.finish()
+    run_inference_trial(cfg, args.checkpoint, test_chains_by_source, device)
 
     if not args.skip_baseline:
-        run_baseline = wandb.init(
-            project=cfg["wandb_project"],
-            entity=cfg.get("wandb_entity"),
-            config={**cfg, "checkpoint": args.checkpoint, "run_type": "baseline"},
-            name="infer_baseline",
-            settings=wandb.Settings(console="off", init_timeout=300),
-        )
-        run_baseline_for_trial(cfg, shuffled, test_chains_by_source, run_baseline, device)
-        run_baseline.finish()
+        run_baseline_for_trial(cfg, shuffled, test_chains_by_source, device)
 
     gc.collect()
     torch.cuda.empty_cache()
+
 
 
 
