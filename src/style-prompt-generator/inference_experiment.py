@@ -151,7 +151,9 @@ def run_inference_trial(cfg, checkpoint_path, test_chains_by_source, run, device
     set_seed(cfg["seed"])
 
     model = build_model(cfg, device, log)
-    load_checkpoint(checkpoint_path, log, model)
+    ckpt = torch.load(checkpoint_path, map_location="cpu")
+    model.load_state_dict(ckpt)
+    log.info(f"Loaded final model state_dict: {checkpoint_path}")
     model.eval()
 
     metrics = eval_test_by_source(model, cfg, test_chains_by_source, device, log)
