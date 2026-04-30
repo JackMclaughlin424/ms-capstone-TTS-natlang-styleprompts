@@ -1,19 +1,3 @@
-"""
-sweep.py  --config path/to/sweep_base_config.json
-          --sweep_values path/to/sweep_values.json
-          [options]
-
-Runs a W&B hyperparameter sweep where each trial performs N-fold cross-validation.
-Conversations are split at the conv_id level (same anti-leakage logic as train.py).
-
-Usage
------
-# Start a new sweep and run one agent:
-    python sweep.py --config default_sweep_config.json --sweep_values default_sweep_values.json --n_folds 5 --count 20
-
-# Join an existing sweep from a second machine:
-    python sweep.py --config default_sweep_config.json --sweep_values default_sweep_values.json --sweep_id <SHORT_ID> --count 10
-"""
 
 
 import argparse
