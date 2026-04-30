@@ -160,8 +160,12 @@ def run_inference_trial(cfg, checkpoint_path, test_chains_by_source, device):
 
     model = build_model(cfg, device, log)
     ckpt = torch.load(checkpoint_path, map_location="cpu")
-    model.load_state_dict(ckpt)
-    log.info(f"Loaded final model state_dict: {checkpoint_path}")
+    if isinstance(ckpt, dict) and "model" in ckpt:
+        model.load_state_dict(ckpt["model"])
+        log.info(f"Loaded checkpoint: {checkpoint_path}  (epoch {ckpt.get('epoch')}, step {ckpt.get('step')})")
+    else:
+        model.load_state_dict(ckpt)
+        log.info(f"Loaded final model state_dict: {checkpoint_path}")
     model.eval()
 
     for src, chains in test_chains_by_source.items():
