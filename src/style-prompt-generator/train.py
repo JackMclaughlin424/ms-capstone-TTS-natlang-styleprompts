@@ -34,14 +34,22 @@ warnings.filterwarnings("ignore", category=UserWarning, module=r"torch\._inducto
 
 from model.train_helpers import *
 
-logging.getLogger().addHandler(logging.NullHandler())
-logging.getLogger().setLevel(logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
 log = logging.getLogger(__name__)
 
-# suppress huggingface and other builtin messages
+_log_file = os.environ.get("SLURM_JOB_LOG", "train.log")
+_fh = logging.FileHandler(_log_file, mode="a")
+_fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s", datefmt="%H:%M:%S"))
+logging.getLogger().addHandler(_fh)
+
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("transformers").setLevel(logging.WARNING)
 logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
+
 
 
 # Loss
