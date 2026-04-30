@@ -752,6 +752,26 @@ def eval_test_by_source(
         test_loader = DataLoader(test_ds, batch_size=cfg["batch_size"], shuffle=False, **loader_kw)
         all_preds, all_refs, all_texts, all_vecs = [], [], [], []
 
+        # Warm-up: one forward pass to trigger CUDA kernel compilation and
+        # GPU memory allocation before the timed region begins.
+        warm_batch = next(iter(test_loader))
+        with torch.no_grad():
+            with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
+                _audio       = warm_batch["audio"].to(device)
+                _lengths     = warm_batch["lengths"].to(device)
+                _text_only   = warm_batch["text_only"].to(device)
+                _texts       = warm_batch["transcription"]
+                _speaker_ids = warm_batch["speaker_id"]
+                if cfg["num_turns"] == 0:
+                    _audio     = torch.zeros_like(_audio)
+                    _text_only = torch.ones_like(_text_only)
+                _ctx = model.scfa(_audio, _lengths, _texts, _speaker_ids, _text_only)
+                _vec = model.pooler(_ctx)
+                del _ctx
+                model.style_generator.generate(_vec)
+                del _vec
+        if device.type == "cuda":
+            torch.cuda.synchronize()
 
         t0_infer = time.time()
         with torch.no_grad():

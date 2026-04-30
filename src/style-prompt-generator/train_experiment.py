@@ -96,7 +96,7 @@ def run_baseline_for_trial(cfg, shuffled, test_chains_by_source, run, device):
     """
     num_few_shot         = cfg.get("num_few_shot", 25)
     max_new_tokens       = cfg.get("max_new_tokens", 80)
-    inference_batch_size = cfg.get("inference_batch_size", 8)
+    inference_batch_size = cfg.get("inference_batch_size", 16)
     llm_repo             = cfg.get("llm_repo", LLM_REPO)
     device_str           = str(device)
 
